@@ -5,3 +5,9 @@ colorama
 requests
 telethon
 flask
+colorama
+flask
+requests
+telethon
+pyrogram
+tgcrypto
