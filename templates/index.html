@@ -245,6 +245,37 @@
   .divider { height: 1px; background: #30363d; margin: 24px 0; }
 
   .setting-field { margin-bottom: 16px; }
+
+  /* Account items */
+  .account-item {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    transition: border-color 0.15s;
+  }
+  .account-item.online { border-color: #238636; }
+  .account-item-header { display: flex; align-items: center; gap: 10px; }
+  .acc-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .acc-dot.green { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
+  .acc-dot.red { background: #f85149; }
+  .acc-name { font-size: 14px; font-weight: 600; flex: 1; }
+  .acc-meta { font-size: 12px; color: #8b949e; }
+  .acc-actions { display: flex; gap: 6px; }
+  .acc-login-form { margin-top: 14px; border-top: 1px solid #30363d; padding-top: 14px; display: none; }
+  .acc-login-form.show { display: block; }
+  .acc-speed-badge {
+    display: inline-block;
+    background: #0c1825;
+    color: #58a6ff;
+    border: 1px solid #1f6feb;
+    border-radius: 12px;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-top: 12px;
+  }
 </style>
 </head>
 <body>
@@ -265,6 +296,7 @@
   <div class="tabs" id="globalTabs">
     <div class="tab active" id="tabExtract" onclick="switchTab('extract')">① Extract Members</div>
     <div class="tab" id="tabAdd" onclick="switchTab('add')">② Add Members</div>
+    <div class="tab" id="tabAccounts" onclick="switchTab('accounts')">👥 Accounts</div>
     <div class="tab tab-settings" id="tabSettings" onclick="switchTab('settings')">⚙️ Settings</div>
   </div>
 
@@ -355,6 +387,20 @@
     </div>
   </div>
 
+  <!-- ACCOUNTS TAB -->
+  <div id="tab-accounts" class="tab-content">
+    <div class="card">
+      <div class="card-title">👥 Telegram Accounts</div>
+      <div class="card-sub">Add multiple Telegram accounts to add members faster. Each logged-in account works in parallel — 2 accounts = 2× speed, 3 accounts = 3× speed, etc.</div>
+      <div id="accountsList"></div>
+      <div id="accSpeedBadge" class="acc-speed-badge" style="display:none"></div>
+      <div style="margin-top:16px;">
+        <button class="btn btn-blue" onclick="addNewAccount()" id="addAccBtn">➕ Add Another Account</button>
+      </div>
+      <div class="alert alert-error" id="accError"></div>
+    </div>
+  </div>
+
   <!-- ADD TAB -->
   <div id="tab-add" class="tab-content">
     <div class="card">
@@ -365,12 +411,21 @@
           <label>Group username or invite link</label>
           <input type="text" id="targetGroup" placeholder="mygroup  or  https://t.me/+JO-8L4UT7gIyNzc1" />
         </div>
-        <div style="width:160px; flex-shrink:0">
-          <label>Max members to add <span style="color:#8b949e;font-weight:400;">(0 = all)</span></label>
+        <div style="width:140px; flex-shrink:0">
+          <label>Max members <span style="color:#8b949e;font-weight:400;">(0 = all)</span></label>
           <input type="number" id="addLimit" placeholder="e.g. 50" min="0" style="width:100%" />
         </div>
+        <div style="width:150px; flex-shrink:0">
+          <label>Delay between adds <span style="color:#8b949e;font-weight:400;">(seconds)</span></label>
+          <input type="number" id="addDelay" value="15" min="0" max="120" style="width:100%" />
+        </div>
       </div>
-      <div style="margin-top:16px;">
+      <div style="margin-top:8px;">
+        <div class="alert alert-info show" style="margin-top:0;font-size:12px;">
+          ⏱️ Delay is randomised between <b>N</b> and <b>N+5</b> seconds per add. Default 15 → actual 15–20s. Keeps Telegram from flagging the account.
+        </div>
+      </div>
+      <div style="margin-top:12px;">
         <button class="btn btn-primary" onclick="startAdd()" id="startAddBtn">
           ➕ Start Adding Members
         </button>
@@ -479,6 +534,7 @@ function switchTab(name) {
   const tabEl = document.getElementById("tab" + name.charAt(0).toUpperCase() + name.slice(1));
   if (tabEl) tabEl.classList.add("active");
   if (name === "settings") loadSettings();
+  if (name === "accounts") loadAccounts();
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
@@ -706,7 +762,7 @@ async function extractMembers() {
   res.members.forEach(u => {
     const chip = document.createElement("div");
     chip.className = "member-chip";
-    chip.textContent = "@" + u;
+    chip.textContent = u.startsWith("id:") ? `user#${u.slice(3)}` : "@" + u;
     preview.appendChild(chip);
   });
   if (res.count > 50) {
@@ -727,11 +783,12 @@ async function startAdd() {
   if (eventSource) { eventSource.close(); eventSource = null; }
 
   const limit = parseInt(document.getElementById("addLimit").value) || 0;
+  const delay = parseInt(document.getElementById("addDelay").value) || 0;
   const btn = document.getElementById("startAddBtn");
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Starting...';
 
-  const res = await api("/api/add", { group, limit });
+  const res = await api("/api/add", { group, limit, delay });
   if (!res.ok) {
     btn.disabled = false;
     btn.innerHTML = "➕ Start Adding Members";
@@ -749,6 +806,15 @@ async function startAdd() {
   eventSource.onmessage = function(e) {
     const d = JSON.parse(e.data);
     if (d.type === "ping") return;
+    const lb = document.getElementById("logBox");
+    const addLine = (text, cls, color) => {
+      const line = document.createElement("div");
+      line.className = "log-line" + (cls ? " " + cls : "");
+      if (color) line.style.color = color;
+      line.textContent = text;
+      lb.appendChild(line);
+      lb.scrollTop = lb.scrollHeight;
+    };
     if (d.type === "progress") {
       const pct = Math.round((d.current / d.total) * 100);
       document.getElementById("progressBar").style.width = pct + "%";
@@ -756,41 +822,36 @@ async function startAdd() {
       document.getElementById("statAdded").textContent = d.added;
       document.getElementById("statFailed").textContent = d.failed;
       document.getElementById("statCurrent").textContent = d.current;
-      const lb = document.getElementById("logBox");
-      const line = document.createElement("div");
       const icons = { added: "✅", privacy: "🔒", too_many: "📛", not_contact: "👥", error: "❌" };
-      line.className = "log-line " + (d.status === "added" ? "ok" : "err");
+      const acc = d.account ? `[${d.account}] ` : "";
       const detail = d.detail ? ` — ${d.detail}` : "";
-      line.textContent = `[${d.current}/${d.total}] ${icons[d.status] || "❓"} @${d.user}${detail}`;
-      lb.appendChild(line);
-      lb.scrollTop = lb.scrollHeight;
+      const userDisplay = d.user.startsWith("id:") ? `user#${d.user.slice(3)}` : `@${d.user}`;
+      addLine(`[${d.current}/${d.total}] ${acc}${icons[d.status] || "❓"} ${userDisplay}${detail}`,
+              d.status === "added" ? "ok" : "err");
     } else if (d.type === "info") {
-      const lb = document.getElementById("logBox");
-      const line = document.createElement("div");
-      line.className = "log-line";
-      line.style.color = "#58a6ff";
-      line.textContent = "ℹ️ " + d.message;
-      lb.appendChild(line);
-      lb.scrollTop = lb.scrollHeight;
+      addLine("ℹ️ " + d.message, "", "#58a6ff");
+    } else if (d.type === "warn") {
+      addLine("⚠️ " + d.message, "warn");
     } else if (d.type === "flood") {
-      const lb = document.getElementById("logBox");
-      const line = document.createElement("div");
-      line.className = "log-line warn";
-      line.textContent = "⚠️ " + d.message;
-      lb.appendChild(line);
-      lb.scrollTop = lb.scrollHeight;
+      addLine("⏳ " + d.message, "warn");
+    } else if (d.type === "countdown") {
+      // Update the last countdown line in place
+      const lines = lb.querySelectorAll(".countdown-line");
+      lines.forEach(l => l.remove());
+      if (d.seconds > 0) {
+        const line = document.createElement("div");
+        line.className = "log-line warn countdown-line";
+        line.textContent = `⏱ Waiting... ${d.seconds}s remaining`;
+        lb.appendChild(line);
+        lb.scrollTop = lb.scrollHeight;
+      }
     } else if (d.type === "done") {
       eventSource.close();
       btn.disabled = false;
       btn.innerHTML = "➕ Start Adding Members";
       document.getElementById("progressBar").style.width = "100%";
       hideAlert("addInfo");
-      const lb = document.getElementById("logBox");
-      const line = document.createElement("div");
-      line.className = "log-line ok";
-      line.textContent = `✅ Done! Added: ${d.added} | Failed: ${d.failed} | Total: ${d.total}`;
-      lb.appendChild(line);
-      lb.scrollTop = lb.scrollHeight;
+      addLine(`✅ Done! Added: ${d.added} | Failed: ${d.failed} | Total: ${d.total}`, "ok");
     } else if (d.type === "error") {
       eventSource.close();
       btn.disabled = false;
@@ -798,6 +859,133 @@ async function startAdd() {
       showAlert("addError", d.message);
     }
   };
+}
+
+// ── Accounts ──────────────────────────────────────────────────────────────────
+
+async function loadAccounts() {
+  const container = document.getElementById("accountsList");
+  container.innerHTML = '<div style="color:#8b949e;font-size:13px;">Loading accounts...</div>';
+  const res = await api("/api/accounts");
+  if (!res.ok) { container.innerHTML = '<div style="color:#f85149;">Failed to load accounts.</div>'; return; }
+  container.innerHTML = "";
+  const accounts = res.accounts;
+  const loggedIn = accounts.filter(a => a.logged_in).length;
+  accounts.forEach(acc => {
+    const div = document.createElement("div");
+    div.className = "account-item" + (acc.logged_in ? " online" : "");
+    div.id = `acc-item-${acc.id}`;
+    const nameDisplay = acc.logged_in ? `${acc.display_name || acc.name}${acc.username ? ' (@' + acc.username + ')' : ''}` : acc.name;
+    div.innerHTML = `
+      <div class="account-item-header">
+        <div class="acc-dot ${acc.logged_in ? 'green' : 'red'}"></div>
+        <div>
+          <div class="acc-name">${nameDisplay}</div>
+          <div class="acc-meta">${acc.logged_in ? '🟢 Logged in' : '🔴 Not logged in'}</div>
+        </div>
+        <div class="acc-actions">
+          ${acc.logged_in
+            ? `<button class="btn btn-ghost" style="font-size:12px;padding:6px 12px;" onclick="accLogout('${acc.id}')">Logout</button>`
+            : `<button class="btn btn-blue" style="font-size:12px;padding:6px 12px;" onclick="toggleAccForm('${acc.id}')">Login</button>`
+          }
+          ${acc.id !== 'main' ? `<button class="btn btn-danger" style="font-size:12px;padding:6px 12px;" onclick="removeAccount('${acc.id}')">Remove</button>` : ''}
+        </div>
+      </div>
+      <div class="acc-login-form" id="acc-form-${acc.id}">
+        <div id="acc-step-phone-${acc.id}">
+          <div class="row">
+            <div class="field">
+              <label>Phone number (with country code)</label>
+              <input type="tel" id="acc-phone-${acc.id}" placeholder="+1 555 000 0000" />
+            </div>
+            <button class="btn btn-blue" onclick="accSendCode('${acc.id}')">Send Code</button>
+          </div>
+        </div>
+        <div id="acc-step-code-${acc.id}" style="display:none;margin-top:12px;">
+          <div class="row">
+            <div class="field">
+              <label>Verification code</label>
+              <input type="text" id="acc-code-${acc.id}" placeholder="12345" maxlength="10" />
+            </div>
+            <button class="btn btn-primary" onclick="accVerifyCode('${acc.id}')">Verify</button>
+          </div>
+          <div id="acc-step-pw-${acc.id}" style="display:none;margin-top:10px;">
+            <label>2FA Password</label>
+            <input type="password" id="acc-pw-${acc.id}" placeholder="Your 2FA password" />
+          </div>
+        </div>
+        <div class="alert alert-error" id="acc-err-${acc.id}"></div>
+      </div>`;
+    container.appendChild(div);
+  });
+  const badge = document.getElementById("accSpeedBadge");
+  if (loggedIn > 1) {
+    badge.textContent = `⚡ ${loggedIn} accounts active — adding at ${loggedIn}× speed`;
+    badge.style.display = "inline-block";
+  } else {
+    badge.style.display = "none";
+  }
+}
+
+async function addNewAccount() {
+  const res = await api("/api/accounts/add", {});
+  if (!res.ok) { showAlert("accError", res.error || "Failed to add account."); return; }
+  await loadAccounts();
+  // Auto-expand login form for new account
+  const form = document.getElementById(`acc-form-${res.account.id}`);
+  if (form) form.classList.add("show");
+}
+
+function toggleAccForm(accId) {
+  const form = document.getElementById(`acc-form-${accId}`);
+  if (form) form.classList.toggle("show");
+}
+
+async function accSendCode(accId) {
+  const phone = document.getElementById(`acc-phone-${accId}`).value.trim();
+  if (!phone) return;
+  const errEl = document.getElementById(`acc-err-${accId}`);
+  errEl.classList.remove("show");
+  const res = await api(`/api/accounts/${accId}/send-code`, { phone });
+  if (res.ok) {
+    document.getElementById(`acc-step-code-${accId}`).style.display = "block";
+    document.getElementById(`acc-phone-${accId}`).disabled = true;
+  } else {
+    errEl.textContent = res.error;
+    errEl.classList.add("show");
+  }
+}
+
+async function accVerifyCode(accId) {
+  const code = document.getElementById(`acc-code-${accId}`).value.trim();
+  const pw = document.getElementById(`acc-pw-${accId}`)?.value.trim() || "";
+  if (!code) return;
+  const errEl = document.getElementById(`acc-err-${accId}`);
+  errEl.classList.remove("show");
+  const res = await api(`/api/accounts/${accId}/verify-code`, { code, password: pw });
+  if (res.ok) {
+    await loadAccounts();
+  } else if (res.needs_password) {
+    document.getElementById(`acc-step-pw-${accId}`).style.display = "block";
+    errEl.textContent = "Enter your 2FA password above and click Verify again.";
+    errEl.classList.add("show");
+  } else {
+    errEl.textContent = res.error;
+    errEl.classList.add("show");
+  }
+}
+
+async function accLogout(accId) {
+  if (!confirm("Logout this account?")) return;
+  await api(`/api/accounts/${accId}/logout`, {});
+  await loadAccounts();
+  if (accId === "main") location.reload();
+}
+
+async function removeAccount(accId) {
+  if (!confirm("Remove this account permanently?")) return;
+  await api(`/api/accounts/${accId}/remove`, {});
+  await loadAccounts();
 }
 
 document.getElementById("phoneInput").addEventListener("keydown", e => { if (e.key === "Enter") sendCode(); });
