@@ -330,12 +330,18 @@
       </div>
 
       <div id="stepCode" style="display:none; margin-top:16px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+          <label style="margin:0">Verification code sent to your phone</label>
+          <span id="codeTimer" style="font-size:12px; color:#e3b341; font-weight:600; display:none;">⏱ <span id="codeTimerVal">120</span>s</span>
+        </div>
         <div class="row">
           <div class="field">
-            <label>Verification code sent to your phone</label>
             <input type="text" id="codeInput" placeholder="12345" maxlength="10" />
           </div>
           <button class="btn btn-primary" onclick="verifyCode()" id="verifyBtn">Verify</button>
+        </div>
+        <div style="margin-top:8px;">
+          <button class="btn btn-ghost" onclick="resendCode()" id="resendBtn" style="font-size:12px; padding:6px 14px;">🔄 Resend Code</button>
         </div>
         <div id="stepPassword" style="display:none; margin-top:12px;">
           <label>Two-Factor Password (2FA)</label>
@@ -507,6 +513,9 @@ let selectedGroup = null;
 let eventSource = null;
 let hashMasked = true;
 let rawHash = "";
+let _loginPhone = "";
+let _codeTimerInterval = null;
+const _accPhones = {};
 
 async function api(path, body) {
   const opts = body !== undefined
@@ -581,6 +590,24 @@ function showLoginCard() {
 
 // ── Auth ───────────────────────────────────────────────────────────────────────
 
+function startCodeTimer() {
+  clearInterval(_codeTimerInterval);
+  const timerWrap = document.getElementById("codeTimer");
+  const timerVal = document.getElementById("codeTimerVal");
+  let secs = 120;
+  timerWrap.style.display = "inline";
+  timerVal.textContent = secs;
+  _codeTimerInterval = setInterval(() => {
+    secs--;
+    timerVal.textContent = secs;
+    if (secs <= 0) {
+      clearInterval(_codeTimerInterval);
+      timerWrap.style.display = "none";
+      showAlert("codeError", "Code expired — click Resend Code to get a new one.");
+    }
+  }, 1000);
+}
+
 async function sendCode() {
   const phone = document.getElementById("phoneInput").value.trim();
   if (!phone) return;
@@ -592,12 +619,27 @@ async function sendCode() {
   btn.disabled = false;
   btn.innerHTML = "Send Code";
   if (res.ok) {
+    _loginPhone = res.phone || phone;
     document.getElementById("stepCode").style.display = "block";
+    document.getElementById("codeInput").value = "";
     document.getElementById("stepPhone").querySelector("input").disabled = true;
     btn.disabled = true;
+    startCodeTimer();
   } else {
     showAlert("phoneError", res.error);
   }
+}
+
+async function resendCode() {
+  clearInterval(_codeTimerInterval);
+  document.getElementById("codeTimer").style.display = "none";
+  const phoneInput = document.getElementById("phoneInput");
+  phoneInput.disabled = false;
+  document.getElementById("sendCodeBtn").disabled = false;
+  document.getElementById("stepCode").style.display = "none";
+  document.getElementById("codeInput").value = "";
+  hideAlert("codeError");
+  await sendCode();
 }
 
 async function verifyCode() {
@@ -608,10 +650,11 @@ async function verifyCode() {
   const btn = document.getElementById("verifyBtn");
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>';
-  const res = await api("/api/verify-code", { code, password });
+  const res = await api("/api/verify-code", { code, password, phone: _loginPhone });
   btn.disabled = false;
   btn.innerHTML = "Verify";
   if (res.ok) {
+    clearInterval(_codeTimerInterval);
     showLoggedIn(res.name || res.username || "User");
   } else if (res.needs_password) {
     document.getElementById("stepPassword").style.display = "block";
@@ -948,6 +991,7 @@ async function accSendCode(accId) {
   errEl.classList.remove("show");
   const res = await api(`/api/accounts/${accId}/send-code`, { phone });
   if (res.ok) {
+    _accPhones[accId] = res.phone || phone;
     document.getElementById(`acc-step-code-${accId}`).style.display = "block";
     document.getElementById(`acc-phone-${accId}`).disabled = true;
   } else {
@@ -962,7 +1006,8 @@ async function accVerifyCode(accId) {
   if (!code) return;
   const errEl = document.getElementById(`acc-err-${accId}`);
   errEl.classList.remove("show");
-  const res = await api(`/api/accounts/${accId}/verify-code`, { code, password: pw });
+  const phone = _accPhones[accId] || "";
+  const res = await api(`/api/accounts/${accId}/verify-code`, { code, password: pw, phone });
   if (res.ok) {
     await loadAccounts();
   } else if (res.needs_password) {

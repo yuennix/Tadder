@@ -16,6 +16,9 @@ ACCOUNTS_FILE = "accounts.json"
 progress_queue = queue.Queue()
 add_running = False
 
+# Store phone_code_hash server-side keyed by phone (avoids cookie/proxy session issues)
+_pending_codes: dict = {}   # phone -> {"hash": str, "session": session_name}
+
 # ── Async helper ──────────────────────────────────────────────────────────────
 
 def _run(coro):
@@ -168,9 +171,8 @@ def send_code():
             await client.disconnect()
     try:
         phone_code_hash = _run(_send())
-        session["phone"] = phone
-        session["phone_code_hash"] = phone_code_hash
-        return jsonify({"ok": True})
+        _pending_codes[phone] = {"hash": phone_code_hash, "session": SESSION_FILE}
+        return jsonify({"ok": True, "phone": phone})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
@@ -179,10 +181,11 @@ def verify_code():
     data = request.get_json()
     code     = data.get("code", "").strip()
     password = data.get("password", "").strip()
-    phone    = session.get("phone")
-    phone_code_hash = session.get("phone_code_hash")
-    if not phone or not phone_code_hash:
-        return jsonify({"ok": False, "error": "Session expired. Please send code again."})
+    phone    = data.get("phone", "").strip()
+    pending  = _pending_codes.get(phone) if phone else None
+    if not phone or not pending:
+        return jsonify({"ok": False, "error": "Session expired. Please send the code again."})
+    phone_code_hash = pending["hash"]
     async def _verify():
         client = make_client(SESSION_FILE)
         await client.connect()
@@ -201,6 +204,7 @@ def verify_code():
         user, needs_pw = _run(_verify())
         if needs_pw:
             return jsonify({"ok": False, "needs_password": True})
+        _pending_codes.pop(phone, None)
         return jsonify({"ok": True, "name": user.first_name or "", "username": user.username or ""})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
@@ -291,9 +295,8 @@ def acc_send_code(acc_id):
             await client.disconnect()
     try:
         phone_code_hash = _run(_send())
-        session[f"phone_{acc_id}"] = phone
-        session[f"hash_{acc_id}"]  = phone_code_hash
-        return jsonify({"ok": True})
+        _pending_codes[f"{acc_id}:{phone}"] = {"hash": phone_code_hash, "session": acc["session"]}
+        return jsonify({"ok": True, "phone": phone})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
@@ -305,10 +308,11 @@ def acc_verify_code(acc_id):
     data = request.get_json()
     code     = data.get("code", "").strip()
     password = data.get("password", "").strip()
-    phone    = session.get(f"phone_{acc_id}")
-    phone_code_hash = session.get(f"hash_{acc_id}")
-    if not phone or not phone_code_hash:
+    phone    = data.get("phone", "").strip()
+    pending  = _pending_codes.get(f"{acc_id}:{phone}") if phone else None
+    if not phone or not pending:
         return jsonify({"ok": False, "error": "Session expired. Please send code again."})
+    phone_code_hash = pending["hash"]
     async def _verify():
         client = make_client(acc["session"])
         await client.connect()
