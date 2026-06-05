@@ -11,3 +11,10 @@ requests
 telethon
 pyrogram
 tgcrypto
+colorama
+flask
+pyrogram
+requests
+telethon
+tgcrypto
+gunicorn
