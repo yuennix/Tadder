@@ -6,7 +6,8 @@ from telethon.errors import (
     UserNotMutualContactError, SessionPasswordNeededError
 )
 from telethon.tl.functions.channels import InviteToChannelRequest
-from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest
+from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest, AddChatUserRequest
+from telethon.tl.types import Channel as TeleChannel
 import os, queue, threading, json, uuid, asyncio, random, time
 
 app = Flask(__name__)
@@ -470,6 +471,30 @@ def extract():
 
 # ── Add Members ──────────────────────────────────────────────────────────────────
 
+async def _do_add(client, chat, peer, is_channel):
+    """Add a user using the correct method for the chat type, with fallback."""
+    if is_channel:
+        try:
+            await client(InviteToChannelRequest(channel=chat, users=[peer]))
+            return
+        except Exception as e:
+            if "CHAT_MEMBER_ADD_FAILED" in str(e) or "CHAT_ADMIN_REQUIRED" in str(e):
+                # Fall back to group method in case chat is actually a linked group
+                await client(AddChatUserRequest(chat_id=chat.id, user_id=peer, fwd_limit=50))
+                return
+            raise
+    else:
+        try:
+            await client(AddChatUserRequest(chat_id=chat.id, user_id=peer, fwd_limit=50))
+            return
+        except Exception as e:
+            if "CHAT_MEMBER_ADD_FAILED" in str(e) or "CHAT_INVALID" in str(e):
+                # Chat may actually be a supergroup — try channel method
+                await client(InviteToChannelRequest(channel=chat, users=[peer]))
+                return
+            raise
+
+
 async def _account_worker_async(acc, gp_id, users, delay_min, delay_max, shared):
     label  = acc.get("name", acc["id"])
     client = make_client(acc["session"])
@@ -483,16 +508,36 @@ async def _account_worker_async(acc, gp_id, users, delay_min, delay_max, shared)
         except Exception as e:
             progress_queue.put({"type": "error", "message": f"[{label}] Could not resolve group: {e}"})
             return
-        title = getattr(chat, "title", str(gp_id))
-        progress_queue.put({"type": "info", "message": f"[{label}] Resolved '{title}'. Adding {len(users)} members."})
+
+        is_channel = isinstance(chat, TeleChannel)
+        title      = getattr(chat, "title", str(gp_id))
+        kind       = "channel/supergroup" if is_channel else "group"
+        progress_queue.put({"type": "info",
+                            "message": f"[{label}] Resolved '{title}' ({kind}). Adding {len(users)} members."})
         i = 0
         while i < len(users):
             userr = users[i]
             retry = False
             try:
+                # ── Resolve peer ───────────────────────────────────────────
                 lookup = int(userr[3:]) if userr.startswith("id:") else userr
-                peer   = await client.get_input_entity(lookup)
-                await client(InviteToChannelRequest(channel=chat, users=[peer]))
+                try:
+                    peer = await client.get_input_entity(lookup)
+                except (ValueError, KeyError, TypeError):
+                    # ID-only user — no access hash in this session's cache
+                    with shared["lock"]:
+                        shared["failed"]  += 1
+                        shared["current"] += 1
+                        a, f, c, t = shared["added"], shared["failed"], shared["current"], shared["total"]
+                    progress_queue.put({"type": "progress", "current": c, "total": t,
+                                        "added": a, "failed": f, "user": userr,
+                                        "status": "no_hash", "account": label})
+                    i += 1
+                    continue
+
+                # ── Add with correct method + fallback ─────────────────────
+                await _do_add(client, chat, peer, is_channel)
+
                 with shared["lock"]:
                     shared["added"]   += 1
                     shared["current"] += 1
@@ -502,6 +547,7 @@ async def _account_worker_async(acc, gp_id, users, delay_min, delay_max, shared)
                                     "status": "added", "account": label})
                 if i < len(users) - 1:
                     await asyncio.sleep(random.uniform(delay_min, delay_max))
+
             except FloodWaitError as e:
                 wait = e.seconds
                 progress_queue.put({"type": "flood",
@@ -551,13 +597,15 @@ async def _account_worker_async(acc, gp_id, users, delay_min, delay_max, shared)
                                     "added": a, "failed": f, "user": userr,
                                     "status": "not_contact", "account": label})
             except Exception as ex:
+                err = str(ex)
+                status = "add_failed" if "CHAT_MEMBER_ADD_FAILED" in err else "error"
                 with shared["lock"]:
                     shared["failed"]  += 1
                     shared["current"] += 1
                     a, f, c, t = shared["added"], shared["failed"], shared["current"], shared["total"]
                 progress_queue.put({"type": "progress", "current": c, "total": t,
                                     "added": a, "failed": f, "user": userr,
-                                    "status": "error", "detail": str(ex), "account": label})
+                                    "status": status, "detail": err, "account": label})
             if not retry:
                 i += 1
     finally:
