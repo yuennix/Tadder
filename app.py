@@ -7,7 +7,7 @@ from telethon.errors import (
 )
 from telethon.tl.functions.channels import InviteToChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest
-import os, queue, threading, json, uuid, asyncio, random
+import os, queue, threading, json, uuid, asyncio, random, time
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET", "tadder-secret-key-2024")
@@ -450,7 +450,7 @@ def extract():
             my_id = me.id
             chat  = await resolve_chat(client, identifier)
             saved = []
-            async for user in client.iter_participants(chat):
+            async for user in client.iter_participants(chat, aggressive=True):
                 if user.bot or user.id == my_id:
                     continue
                 entry = user.username if user.username else f"id:{user.id}"
@@ -612,12 +612,24 @@ def run_add_worker(gp_id, limit, delay):
                             "message": f"Using {n} account{'s' if n > 1 else ''} | {total} members | delay {delay_min}–{delay_max}s{per}."})
         chunks = [users[i::n] for i in range(n)]
         shared = {"lock": threading.Lock(), "added": 0, "failed": 0, "current": 0, "total": total}
-        threads = [
-            threading.Thread(target=run_account_worker,
-                             args=(acc, gp_id, chunk, delay_min, delay_max, shared),
-                             daemon=True)
-            for acc, chunk in zip(active, chunks)
-        ]
+
+        ACC_START_MIN, ACC_START_MAX = 15, 20
+
+        def delayed_worker(acc, gp_id, chunk, delay_min, delay_max, shared, start_delay):
+            if start_delay > 0:
+                progress_queue.put({"type": "info",
+                                    "message": f"[{acc.get('name', acc['id'])}] Starting in {start_delay}s..."})
+                time.sleep(start_delay)
+            run_account_worker(acc, gp_id, chunk, delay_min, delay_max, shared)
+
+        threads = []
+        for idx, (acc, chunk) in enumerate(zip(active, chunks)):
+            start_delay = round(random.uniform(ACC_START_MIN, ACC_START_MAX) * idx, 1)
+            t = threading.Thread(target=delayed_worker,
+                                 args=(acc, gp_id, chunk, delay_min, delay_max, shared, start_delay),
+                                 daemon=True)
+            threads.append(t)
+
         for t in threads: t.start()
         for t in threads: t.join()
         progress_queue.put({"type": "done", "added": shared["added"],
