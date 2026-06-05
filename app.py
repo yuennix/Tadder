@@ -1,22 +1,34 @@
 from flask import Flask, render_template, request, jsonify, session, Response
-from telethon.sync import TelegramClient
-from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest, AddChatUserRequest
-from telethon.tl.functions.channels import InviteToChannelRequest
-from telethon.tl.types import Chat, Channel
-import telethon
-import os, queue, threading, json, time
+from pyrogram import Client as PyroClient
+from pyrogram.errors import (
+    FloodWait, PeerFlood, UserPrivacyRestricted, UserAlreadyParticipant,
+    UserChannelsTooMuch, UserNotMutualContact, SessionPasswordNeeded
+)
+import os, queue, threading, json, time, uuid, asyncio, random
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET", "tadder-secret-key-2024")
 
-CONFIG_FILE = "config.json"
-SESSION_FILE = "BlackFox"
+CONFIG_FILE  = "config.json"
+SESSION_FILE = "pyro_main"
+ACCOUNTS_FILE = "accounts.json"
 
 progress_queue = queue.Queue()
 add_running = False
 
+# ── Async helper ──────────────────────────────────────────────────────────────
+
+def _run(coro):
+    """Run an async coroutine synchronously. Creates a fresh event loop per call (thread-safe)."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+# ── Credentials ────────────────────────────────────────────────────────────────
+
 def load_credentials():
-    """Load API credentials: config.json first, then env vars."""
     api_id = 0
     api_hash = ""
     if os.path.exists(CONFIG_FILE):
@@ -33,23 +45,53 @@ def load_credentials():
         api_hash = os.environ.get("TELEGRAM_API_HASH", "")
     return api_id, api_hash
 
-def get_client():
+def make_client(session_name):
     api_id, api_hash = load_credentials()
-    return TelegramClient(SESSION_FILE, api_id, api_hash)
+    return PyroClient(session_name, api_id=api_id, api_hash=api_hash, workdir=".")
 
-def parse_invite_link(gp_id):
-    link = gp_id.strip()
-    for prefix in ["https://t.me/+", "http://t.me/+", "t.me/+",
-                   "https://t.me/joinchat/", "http://t.me/joinchat/", "t.me/joinchat/"]:
-        if link.startswith(prefix):
-            return link[len(prefix):], None
-    if link.startswith("https://t.me/") or link.startswith("t.me/"):
-        return None, link.split("/")[-1]
-    return None, link
+# ── Account helpers ────────────────────────────────────────────────────────────
 
-@app.route("/")
-def index():
-    return render_template("index.html")
+def load_extra_accounts():
+    if os.path.exists(ACCOUNTS_FILE):
+        try:
+            with open(ACCOUNTS_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def save_extra_accounts(accounts):
+    with open(ACCOUNTS_FILE, "w") as f:
+        json.dump(accounts, f, indent=2)
+
+def get_all_accounts():
+    main = {"id": "main", "name": "Main Account", "session": SESSION_FILE}
+    return [main] + load_extra_accounts()
+
+async def resolve_chat(client, identifier):
+    """Resolve a chat from username, ID, or invite link."""
+    ident = identifier
+    if str(ident).lstrip("-").isdigit():
+        ident = int(ident)
+    try:
+        return await client.get_chat(ident)
+    except Exception:
+        pass
+    try:
+        result = await client.join_chat(str(identifier))
+        return result
+    except Exception as e:
+        if "already" in str(e).lower() or "participant" in str(e).lower():
+            async for dialog in client.get_dialogs():
+                if dialog.chat and dialog.chat.invite_link and str(identifier) in dialog.chat.invite_link:
+                    return dialog.chat
+        raise Exception(f"Could not resolve group '{identifier}': {e}")
+
+def remove_session_files(session_name):
+    for ext in [".session", ".session-journal"]:
+        f = session_name + ext
+        if os.path.exists(f):
+            os.remove(f)
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -67,16 +109,12 @@ def get_settings():
             pass
     if source == "none" and api_id and api_hash:
         source = "env"
-    return jsonify({
-        "api_id": str(api_id) if api_id else "",
-        "api_hash": api_hash,
-        "source": source
-    })
+    return jsonify({"api_id": str(api_id) if api_id else "", "api_hash": api_hash, "source": source})
 
 @app.route("/api/settings", methods=["POST"])
 def save_settings():
     data = request.get_json()
-    api_id = str(data.get("api_id", "")).strip()
+    api_id  = str(data.get("api_id", "")).strip()
     api_hash = str(data.get("api_hash", "")).strip()
     if not api_id or not api_hash:
         return jsonify({"ok": False, "error": "Both API ID and API Hash are required."})
@@ -84,9 +122,8 @@ def save_settings():
         int(api_id)
     except ValueError:
         return jsonify({"ok": False, "error": "API ID must be a number."})
-    cfg = {"api_id": int(api_id), "api_hash": api_hash}
     with open(CONFIG_FILE, "w") as f:
-        json.dump(cfg, f)
+        json.dump({"api_id": int(api_id), "api_hash": api_hash}, f)
     return jsonify({"ok": True})
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -96,15 +133,19 @@ def check_auth():
     api_id, api_hash = load_credentials()
     if not api_id or not api_hash:
         return jsonify({"authenticated": False, "error": "missing_credentials"})
+    async def _check():
+        client = make_client(SESSION_FILE)
+        try:
+            await client.connect()
+            me = await client.get_me()
+            await client.disconnect()
+            return {"authenticated": True, "name": me.first_name or "", "username": me.username or ""}
+        except Exception:
+            try: await client.disconnect()
+            except Exception: pass
+            return {"authenticated": False}
     try:
-        client = get_client()
-        client.connect()
-        if client.is_user_authorized():
-            me = client.get_me()
-            client.disconnect()
-            return jsonify({"authenticated": True, "name": me.first_name, "username": me.username})
-        client.disconnect()
-        return jsonify({"authenticated": False})
+        return jsonify(_run(_check()))
     except Exception as e:
         return jsonify({"authenticated": False, "error": str(e)})
 
@@ -117,13 +158,18 @@ def send_code():
     phone = data.get("phone", "").strip()
     if not phone:
         return jsonify({"ok": False, "error": "Phone number is required."})
+    async def _send():
+        client = make_client(SESSION_FILE)
+        await client.connect()
+        try:
+            sent = await client.send_code(phone)
+            return sent.phone_code_hash
+        finally:
+            await client.disconnect()
     try:
-        client = get_client()
-        client.connect()
-        result = client.send_code_request(phone)
+        phone_code_hash = _run(_send())
         session["phone"] = phone
-        session["phone_code_hash"] = result.phone_code_hash
-        client.disconnect()
+        session["phone_code_hash"] = phone_code_hash
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
@@ -131,67 +177,213 @@ def send_code():
 @app.route("/api/verify-code", methods=["POST"])
 def verify_code():
     data = request.get_json()
-    code = data.get("code", "").strip()
+    code     = data.get("code", "").strip()
     password = data.get("password", "").strip()
-    phone = session.get("phone")
+    phone    = session.get("phone")
     phone_code_hash = session.get("phone_code_hash")
     if not phone or not phone_code_hash:
         return jsonify({"ok": False, "error": "Session expired. Please send code again."})
-    try:
-        client = get_client()
-        client.connect()
+    async def _verify():
+        client = make_client(SESSION_FILE)
+        await client.connect()
         try:
-            client.sign_in(phone, code, phone_code_hash=phone_code_hash)
-        except telethon.errors.SessionPasswordNeededError:
-            if not password:
-                client.disconnect()
-                return jsonify({"ok": False, "needs_password": True})
-            client.sign_in(password=password)
-        me = client.get_me()
-        client.disconnect()
-        return jsonify({"ok": True, "name": me.first_name, "username": me.username})
+            try:
+                user = await client.sign_in(phone, phone_code_hash, code)
+                return user, False
+            except SessionPasswordNeeded:
+                if not password:
+                    return None, True
+                user = await client.check_password(password)
+                return user, False
+        finally:
+            await client.disconnect()
+    try:
+        user, needs_pw = _run(_verify())
+        if needs_pw:
+            return jsonify({"ok": False, "needs_password": True})
+        return jsonify({"ok": True, "name": user.first_name or "", "username": user.username or ""})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
 @app.route("/api/logout", methods=["POST"])
 def logout():
-    try:
-        client = get_client()
-        client.connect()
-        client.log_out()
-        client.disconnect()
-    except Exception:
-        pass
-    if os.path.exists(f"{SESSION_FILE}.session"):
-        os.remove(f"{SESSION_FILE}.session")
+    async def _logout():
+        client = make_client(SESSION_FILE)
+        try:
+            await client.connect()
+            await client.log_out()
+        except Exception: pass
+        try: await client.disconnect()
+        except Exception: pass
+    _run(_logout())
+    remove_session_files(SESSION_FILE)
     session.clear()
+    return jsonify({"ok": True})
+
+# ── Multi-account management ──────────────────────────────────────────────────
+
+async def _account_status(acc):
+    client = make_client(acc["session"])
+    try:
+        await client.connect()
+        me = await client.get_me()
+        await client.disconnect()
+        return {**acc, "logged_in": True, "display_name": me.first_name or "", "username": me.username or ""}
+    except Exception:
+        try: await client.disconnect()
+        except Exception: pass
+        return {**acc, "logged_in": False}
+
+@app.route("/api/accounts")
+def list_accounts():
+    async def _list():
+        return [await _account_status(a) for a in get_all_accounts()]
+    try:
+        return jsonify({"ok": True, "accounts": _run(_list())})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+@app.route("/api/accounts/add", methods=["POST"])
+def create_account():
+    extras = load_extra_accounts()
+    acc_id = f"acc_{uuid.uuid4().hex[:8]}"
+    new_acc = {"id": acc_id, "name": f"Account {len(extras) + 2}", "session": f"pyro_{acc_id}"}
+    extras.append(new_acc)
+    save_extra_accounts(extras)
+    return jsonify({"ok": True, "account": new_acc})
+
+@app.route("/api/accounts/<acc_id>/remove", methods=["POST"])
+def remove_account(acc_id):
+    if acc_id == "main":
+        return jsonify({"ok": False, "error": "Cannot remove the main account."})
+    extras = load_extra_accounts()
+    acc = next((a for a in extras if a["id"] == acc_id), None)
+    if not acc:
+        return jsonify({"ok": False, "error": "Account not found."})
+    async def _remove():
+        client = make_client(acc["session"])
+        try:
+            await client.connect()
+            await client.log_out()
+            await client.disconnect()
+        except Exception: pass
+    _run(_remove())
+    remove_session_files(acc["session"])
+    save_extra_accounts([a for a in extras if a["id"] != acc_id])
+    return jsonify({"ok": True})
+
+@app.route("/api/accounts/<acc_id>/send-code", methods=["POST"])
+def acc_send_code(acc_id):
+    acc = next((a for a in get_all_accounts() if a["id"] == acc_id), None)
+    if not acc:
+        return jsonify({"ok": False, "error": "Account not found."})
+    data = request.get_json()
+    phone = data.get("phone", "").strip()
+    if not phone:
+        return jsonify({"ok": False, "error": "Phone number required."})
+    async def _send():
+        client = make_client(acc["session"])
+        await client.connect()
+        try:
+            sent = await client.send_code(phone)
+            return sent.phone_code_hash
+        finally:
+            await client.disconnect()
+    try:
+        phone_code_hash = _run(_send())
+        session[f"phone_{acc_id}"] = phone
+        session[f"hash_{acc_id}"]  = phone_code_hash
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+@app.route("/api/accounts/<acc_id>/verify-code", methods=["POST"])
+def acc_verify_code(acc_id):
+    acc = next((a for a in get_all_accounts() if a["id"] == acc_id), None)
+    if not acc:
+        return jsonify({"ok": False, "error": "Account not found."})
+    data = request.get_json()
+    code     = data.get("code", "").strip()
+    password = data.get("password", "").strip()
+    phone    = session.get(f"phone_{acc_id}")
+    phone_code_hash = session.get(f"hash_{acc_id}")
+    if not phone or not phone_code_hash:
+        return jsonify({"ok": False, "error": "Session expired. Please send code again."})
+    async def _verify():
+        client = make_client(acc["session"])
+        await client.connect()
+        try:
+            try:
+                user = await client.sign_in(phone, phone_code_hash, code)
+                return user, False
+            except SessionPasswordNeeded:
+                if not password:
+                    return None, True
+                user = await client.check_password(password)
+                return user, False
+        finally:
+            await client.disconnect()
+    try:
+        user, needs_pw = _run(_verify())
+        if needs_pw:
+            return jsonify({"ok": False, "needs_password": True})
+        if acc_id != "main":
+            extras = load_extra_accounts()
+            for a in extras:
+                if a["id"] == acc_id:
+                    a["name"] = user.first_name or a["name"]
+            save_extra_accounts(extras)
+        return jsonify({"ok": True, "name": user.first_name or "", "username": user.username or ""})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+@app.route("/api/accounts/<acc_id>/logout", methods=["POST"])
+def acc_logout(acc_id):
+    acc = next((a for a in get_all_accounts() if a["id"] == acc_id), None)
+    if not acc:
+        return jsonify({"ok": False, "error": "Account not found."})
+    async def _logout():
+        client = make_client(acc["session"])
+        try:
+            await client.connect()
+            await client.log_out()
+            await client.disconnect()
+        except Exception: pass
+    _run(_logout())
+    remove_session_files(acc["session"])
+    if acc_id == "main":
+        session.clear()
     return jsonify({"ok": True})
 
 # ── Groups & Members ──────────────────────────────────────────────────────────
 
 @app.route("/api/groups")
 def groups():
-    try:
-        client = get_client()
-        client.connect()
-        if not client.is_user_authorized():
-            client.disconnect()
-            return jsonify({"ok": False, "error": "Not authenticated."})
-        dialogs = client.get_dialogs()
-        group_list = []
-        for dialog in dialogs:
-            if dialog.is_group:
-                try:
+    async def _groups():
+        client = make_client(SESSION_FILE)
+        await client.connect()
+        try:
+            me = await client.get_me()
+            if not me:
+                return None
+            group_list = []
+            async for dialog in client.get_dialogs():
+                chat = dialog.chat
+                if chat.type.value in ("group", "supergroup"):
                     group_list.append({
-                        "id": dialog.entity.id,
-                        "title": dialog.title,
-                        "username": getattr(dialog.entity, "username", None),
-                        "members": getattr(dialog.entity, "participants_count", "?")
+                        "id": chat.id,
+                        "title": chat.title,
+                        "username": chat.username,
+                        "members": chat.members_count or "?"
                     })
-                except Exception:
-                    continue
-        client.disconnect()
-        return jsonify({"ok": True, "groups": group_list})
+            return group_list
+        finally:
+            await client.disconnect()
+    try:
+        result = _run(_groups())
+        if result is None:
+            return jsonify({"ok": False, "error": "Not authenticated."})
+        return jsonify({"ok": True, "groups": result})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
@@ -199,174 +391,219 @@ def groups():
 def extract():
     data = request.get_json()
     identifier = data.get("identifier")
+    async def _extract():
+        client = make_client(SESSION_FILE)
+        await client.connect()
+        try:
+            me = await client.get_me()
+            my_id = me.id
+            chat = await resolve_chat(client, identifier)
+            saved = []
+            async for member in client.get_chat_members(chat.id):
+                user = member.user
+                if not user or user.is_bot:
+                    continue
+                if user.id == my_id:
+                    continue
+                entry = user.username if user.username else f"id:{user.id}"
+                saved.append(entry)
+            with open("members.txt", "w") as f:
+                for entry in saved:
+                    f.write(entry + "\n")
+            return len(saved), saved[:50]
+        finally:
+            await client.disconnect()
     try:
-        client = get_client()
-        client.connect()
-        if not client.is_user_authorized():
-            client.disconnect()
-            return jsonify({"ok": False, "error": "Not authenticated."})
-        invite_hash, username = parse_invite_link(str(identifier))
-        if invite_hash:
-            try:
-                invite_info = client(CheckChatInviteRequest(invite_hash))
-                entity = invite_info.chat
-            except Exception:
-                result = client(ImportChatInviteRequest(invite_hash))
-                entity = result.chats[0]
-        elif str(identifier).lstrip("-").isdigit():
-            entity = client.get_entity(int(identifier))
-        else:
-            entity = client.get_entity(username or identifier)
-        users = client.get_participants(entity, limit=5000)
-        me = client.get_me()
-        my_username = me.username
-        saved = []
-        with open("members.txt", "w") as f:
-            for user in users:
-                if user.username and "bot" not in user.username.lower():
-                    if user.username != my_username:
-                        f.write(user.username + "\n")
-                        saved.append(user.username)
-        client.disconnect()
-        return jsonify({"ok": True, "count": len(saved), "members": saved[:50]})
+        count, preview = _run(_extract())
+        return jsonify({"ok": True, "count": count, "members": preview})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
-def resolve_group(client, gp_id):
-    """Resolve a group from username, public link, or private invite link.
-    Returns the full entity (Chat or Channel) so callers can pick the right API."""
-    invite_hash, username = parse_invite_link(gp_id)
-    if invite_hash:
-        # Already a member? CheckChatInviteRequest returns ChatInviteAlready with .chat
-        try:
-            info = client(CheckChatInviteRequest(invite_hash))
-            chat = getattr(info, "chat", None)
-            if chat:
-                return chat
-        except Exception:
-            pass
-        # Not a member yet — join first
-        try:
-            result = client(ImportChatInviteRequest(invite_hash))
-            return result.chats[0]
-        except telethon.errors.UserAlreadyParticipantError:
-            # Already joined but CheckChatInvite didn't return .chat — scan dialogs
-            # Re-fetch dialogs to find the group by matching
-            dialogs = client.get_dialogs()
-            # Return the most recently active group as a fallback
-            for d in dialogs:
-                if d.is_group:
-                    return d.entity
-        raise ValueError("Could not resolve the invite link. Make sure you are an admin or member of the target group.")
-    else:
-        return client.get_entity(username or gp_id)
+# ── Add Members ────────────────────────────────────────────────────────────────
 
-def add_user_to_group(client, entity, peer_user):
-    """Add a single user to either a regular Chat or a supergroup/Channel."""
-    if isinstance(entity, Chat):
-        # Regular group → AddChatUserRequest
-        client(AddChatUserRequest(chat_id=entity.id, user_id=peer_user, fwd_limit=10))
-    else:
-        # Supergroup or broadcast channel → InviteToChannelRequest
-        input_channel = client.get_input_entity(entity)
-        client(InviteToChannelRequest(channel=input_channel, users=[peer_user]))
+async def _account_worker_async(acc, gp_id, users, delay_min, delay_max, shared):
+    """Async worker for one Pyrogram account."""
+    label = acc.get("name", acc["id"])
+    client = make_client(acc["session"])
+    await client.connect()
+    try:
+        me = await client.get_me()
+        if not me:
+            progress_queue.put({"type": "warn", "message": f"[{label}] Not logged in — skipping."})
+            return
+        try:
+            chat = await resolve_chat(client, gp_id)
+        except Exception as e:
+            progress_queue.put({"type": "error", "message": f"[{label}] Could not resolve group: {e}"})
+            return
+        progress_queue.put({"type": "info",
+                            "message": f"[{label}] Resolved '{chat.title}'. Adding {len(users)} members."})
+        i = 0
+        while i < len(users):
+            userr = users[i]
+            retry = False
+            lookup = int(userr[3:]) if userr.startswith("id:") else userr
+            try:
+                await client.add_chat_members(chat.id, lookup)
+                with shared["lock"]:
+                    shared["added"]   += 1
+                    shared["current"] += 1
+                    a, f, c, t = shared["added"], shared["failed"], shared["current"], shared["total"]
+                progress_queue.put({"type": "progress", "current": c, "total": t,
+                                    "added": a, "failed": f, "user": userr,
+                                    "status": "added", "account": label})
+                if i < len(users) - 1:
+                    await asyncio.sleep(random.uniform(delay_min, delay_max))
+            except FloodWait as e:
+                wait = e.value
+                progress_queue.put({"type": "flood",
+                                    "message": f"[{label}] FloodWait {wait}s — waiting then retrying @{userr}..."})
+                # Countdown during wait
+                remaining = wait
+                while remaining > 0:
+                    progress_queue.put({"type": "countdown", "seconds": remaining})
+                    chunk = min(5, remaining)
+                    await asyncio.sleep(chunk)
+                    remaining -= chunk
+                progress_queue.put({"type": "countdown", "seconds": 0})
+                retry = True
+            except PeerFlood:
+                progress_queue.put({"type": "flood",
+                                    "message": f"[{label}] PeerFlood — account restricted by Telegram. Stopping this account, others continue."})
+                return
+            except UserPrivacyRestricted:
+                with shared["lock"]:
+                    shared["failed"]  += 1
+                    shared["current"] += 1
+                    a, f, c, t = shared["added"], shared["failed"], shared["current"], shared["total"]
+                progress_queue.put({"type": "progress", "current": c, "total": t,
+                                    "added": a, "failed": f, "user": userr,
+                                    "status": "privacy", "account": label})
+            except UserAlreadyParticipant:
+                with shared["lock"]:
+                    shared["added"]   += 1
+                    shared["current"] += 1
+                    a, f, c, t = shared["added"], shared["failed"], shared["current"], shared["total"]
+                progress_queue.put({"type": "progress", "current": c, "total": t,
+                                    "added": a, "failed": f, "user": userr,
+                                    "status": "added", "account": label})
+            except UserChannelsTooMuch:
+                with shared["lock"]:
+                    shared["failed"]  += 1
+                    shared["current"] += 1
+                    a, f, c, t = shared["added"], shared["failed"], shared["current"], shared["total"]
+                progress_queue.put({"type": "progress", "current": c, "total": t,
+                                    "added": a, "failed": f, "user": userr,
+                                    "status": "too_many", "account": label})
+            except UserNotMutualContact:
+                with shared["lock"]:
+                    shared["failed"]  += 1
+                    shared["current"] += 1
+                    a, f, c, t = shared["added"], shared["failed"], shared["current"], shared["total"]
+                progress_queue.put({"type": "progress", "current": c, "total": t,
+                                    "added": a, "failed": f, "user": userr,
+                                    "status": "not_contact", "account": label})
+            except Exception as ex:
+                with shared["lock"]:
+                    shared["failed"]  += 1
+                    shared["current"] += 1
+                    a, f, c, t = shared["added"], shared["failed"], shared["current"], shared["total"]
+                progress_queue.put({"type": "progress", "current": c, "total": t,
+                                    "added": a, "failed": f, "user": userr,
+                                    "status": "error", "detail": str(ex), "account": label})
+            if not retry:
+                i += 1
+    finally:
+        await client.disconnect()
 
-def run_add_worker(gp_id, limit):
+
+def run_account_worker(acc, gp_id, users, delay_min, delay_max, shared):
+    """Thread target: runs the async account worker with its own event loop."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_account_worker_async(acc, gp_id, users, delay_min, delay_max, shared))
+    except Exception as e:
+        progress_queue.put({"type": "error", "message": f"[{acc.get('name', acc['id'])}] {e}"})
+    finally:
+        loop.close()
+
+
+def run_add_worker(gp_id, limit, delay):
     global add_running
     add_running = True
+    delay_min = max(1, delay)
+    delay_max = delay_min + 5
+    async def _active_accounts():
+        active = []
+        for acc in get_all_accounts():
+            client = make_client(acc["session"])
+            try:
+                await client.connect()
+                me = await client.get_me()
+                await client.disconnect()
+                if me:
+                    active.append(acc)
+            except Exception:
+                try: await client.disconnect()
+                except Exception: pass
+        return active
     try:
-        client = get_client()
-        client.connect()
-
-        try:
-            entity = resolve_group(client, gp_id)
-        except Exception as e:
-            progress_queue.put({"type": "error", "message": f"Could not resolve target group: {e}"})
-            client.disconnect()
-            add_running = False
+        active = _run(_active_accounts())
+        if not active:
+            progress_queue.put({"type": "error", "message": "No logged-in accounts found. Please log in first."})
             return
-
-        group_type = "channel" if isinstance(entity, Channel) else "chat"
-        progress_queue.put({"type": "info", "message": f"Resolved as {'supergroup/channel' if group_type == 'channel' else 'regular group'}: {getattr(entity, 'title', str(entity.id))}"})
-
         if not os.path.exists("members.txt"):
             progress_queue.put({"type": "error", "message": "No members.txt found. Please extract members first."})
-            client.disconnect()
-            add_running = False
             return
-
         with open("members.txt", "r") as f:
             all_users = [line.strip() for line in f if line.strip()]
-
         users = all_users[:limit] if limit and limit > 0 else all_users
         total = len(users)
-        added = 0
-        failed = 0
-
-        for i, userr in enumerate(users):
-            try:
-                peer_user = client.get_input_entity(userr)
-                add_user_to_group(client, entity, peer_user)
-                added += 1
-                progress_queue.put({"type": "progress", "current": i + 1, "total": total,
-                                    "added": added, "failed": failed, "user": userr, "status": "added"})
-            except telethon.errors.UserPrivacyRestrictedError:
-                failed += 1
-                progress_queue.put({"type": "progress", "current": i + 1, "total": total,
-                                    "added": added, "failed": failed, "user": userr, "status": "privacy"})
-            except telethon.errors.PeerFloodError:
-                progress_queue.put({"type": "flood", "message": "Flood wait — pausing 5 seconds..."})
-                time.sleep(5)
-                failed += 1
-            except telethon.errors.FloodWaitError as e:
-                wait = e.seconds
-                progress_queue.put({"type": "flood", "message": f"FloodWait — pausing {wait} seconds..."})
-                time.sleep(wait)
-            except telethon.errors.UserChannelsTooMuchError:
-                failed += 1
-                progress_queue.put({"type": "progress", "current": i + 1, "total": total,
-                                    "added": added, "failed": failed, "user": userr, "status": "too_many"})
-            except telethon.errors.UserNotMutualContactError:
-                failed += 1
-                progress_queue.put({"type": "progress", "current": i + 1, "total": total,
-                                    "added": added, "failed": failed, "user": userr, "status": "not_contact"})
-            except telethon.errors.UserAlreadyParticipantError:
-                # Already in the group — count as added
-                added += 1
-                progress_queue.put({"type": "progress", "current": i + 1, "total": total,
-                                    "added": added, "failed": failed, "user": userr, "status": "added"})
-            except Exception as ex:
-                failed += 1
-                progress_queue.put({"type": "progress", "current": i + 1, "total": total,
-                                    "added": added, "failed": failed, "user": userr,
-                                    "status": "error", "detail": str(ex)})
-
-        client.disconnect()
-        progress_queue.put({"type": "done", "added": added, "failed": failed, "total": total})
+        n = len(active)
+        per = f"  (~{round(total/n)} per account)" if n > 1 else ""
+        progress_queue.put({"type": "info",
+                            "message": f"Using {n} account{'s' if n > 1 else ''} | {total} members | delay {delay_min}–{delay_max}s{per}."})
+        chunks = [users[i::n] for i in range(n)]
+        shared = {"lock": threading.Lock(), "added": 0, "failed": 0, "current": 0, "total": total}
+        threads = [
+            threading.Thread(target=run_account_worker,
+                             args=(acc, gp_id, chunk, delay_min, delay_max, shared),
+                             daemon=True)
+            for acc, chunk in zip(active, chunks)
+        ]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        progress_queue.put({"type": "done", "added": shared["added"],
+                            "failed": shared["failed"], "total": total})
     except Exception as e:
         progress_queue.put({"type": "error", "message": str(e)})
     finally:
         add_running = False
+
 
 @app.route("/api/add", methods=["POST"])
 def add_members():
     global add_running
     if add_running:
         return jsonify({"ok": False, "error": "An add operation is already running."})
-    data = request.get_json()
-    gp_id = data.get("group", "").strip()
-    limit = data.get("limit", 0)
+    data   = request.get_json()
+    gp_id  = data.get("group", "").strip()
+    limit  = data.get("limit", 0)
+    delay  = data.get("delay", 15)
+    try: limit = int(limit)
+    except (TypeError, ValueError): limit = 0
     try:
-        limit = int(limit)
-    except (TypeError, ValueError):
-        limit = 0
+        delay = int(delay)
+        if delay < 0: delay = 0
+    except (TypeError, ValueError): delay = 15
     if not gp_id:
         return jsonify({"ok": False, "error": "Target group is required."})
     with progress_queue.mutex:
         progress_queue.queue.clear()
-    t = threading.Thread(target=run_add_worker, args=(gp_id, limit), daemon=True)
-    t.start()
+    threading.Thread(target=run_add_worker, args=(gp_id, limit, delay), daemon=True).start()
     return jsonify({"ok": True})
+
 
 @app.route("/api/progress")
 def progress():
@@ -381,6 +618,12 @@ def progress():
                 yield f"data: {json.dumps({'type': 'ping'})}\n\n"
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
