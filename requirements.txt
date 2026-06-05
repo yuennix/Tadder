@@ -1,0 +1,7 @@
+telethon
+requests
+colorama
+colorama
+requests
+telethon
+flask
