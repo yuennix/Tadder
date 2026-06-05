@@ -1,0 +1,25 @@
+# Telegram session (contains your login — never commit)
+*.session
+*.session-journal
+
+# Local credentials config
+config.json
+
+# Extracted members list
+members.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pythonlibs/
+.cache/
+
+# Replit
+.replit
+replit.nix
+.upm/
+.config/
+
+# Attached assets
+attached_assets/
