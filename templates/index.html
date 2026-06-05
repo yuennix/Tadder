@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tadder — Telegram Member Tool</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+
+  header {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header .logo { font-size: 22px; font-weight: 700; color: #58a6ff; letter-spacing: 1px; }
+  header .tagline { color: #8b949e; font-size: 13px; }
+  header .user-badge {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #1f2937;
+    border: 1px solid #30363d;
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 13px;
+    color: #58a6ff;
+    cursor: pointer;
+  }
+  header .user-badge:hover { border-color: #58a6ff; }
+
+  .container { max-width: 860px; margin: 0 auto; padding: 32px 20px; }
+
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 28px;
+    margin-bottom: 20px;
+  }
+  .card-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #e6edf3;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-sub { font-size: 13px; color: #8b949e; margin-bottom: 20px; }
+
+  .step-badge {
+    background: #1f6feb;
+    color: #fff;
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  label { display: block; font-size: 13px; color: #8b949e; margin-bottom: 6px; font-weight: 500; }
+
+  input[type="text"], input[type="tel"], input[type="password"], input[type="number"] {
+    width: 100%;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    color: #e6edf3;
+    padding: 10px 14px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input:focus { border-color: #58a6ff; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 10px 20px;
+    border-radius: 8px;
+    border: none;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-primary { background: #238636; color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: #2ea043; }
+  .btn-blue { background: #1f6feb; color: #fff; }
+  .btn-blue:hover:not(:disabled) { background: #388bfd; }
+  .btn-danger { background: #da3633; color: #fff; }
+  .btn-danger:hover:not(:disabled) { background: #f85149; }
+  .btn-ghost { background: transparent; color: #8b949e; border: 1px solid #30363d; }
+  .btn-ghost:hover:not(:disabled) { color: #e6edf3; border-color: #8b949e; }
+  .btn-copy { background: #21262d; color: #8b949e; border: 1px solid #30363d; padding: 6px 12px; font-size: 12px; border-radius: 6px; cursor: pointer; }
+  .btn-copy:hover { color: #e6edf3; border-color: #8b949e; }
+  .btn-copy.copied { color: #3fb950; border-color: #2ea043; }
+
+  .row { display: flex; gap: 12px; align-items: flex-end; }
+  .row .field { flex: 1; }
+
+  .alert {
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    margin-top: 12px;
+    display: none;
+  }
+  .alert.show { display: flex; align-items: center; gap: 10px; }
+  .alert-error { background: #2d1115; border: 1px solid #f85149; color: #f85149; }
+  .alert-success { background: #0d2117; border: 1px solid #2ea043; color: #3fb950; }
+  .alert-info { background: #0c1825; border: 1px solid #1f6feb; color: #58a6ff; }
+  .alert-warning { background: #2d1a00; border: 1px solid #e3b341; color: #e3b341; }
+
+  .group-list { display: flex; flex-direction: column; gap: 8px; max-height: 340px; overflow-y: auto; margin-top: 16px; }
+  .group-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .group-item:hover { border-color: #58a6ff; background: #0c1825; }
+  .group-item.selected { border-color: #238636; background: #0d2117; }
+  .group-name { font-size: 14px; font-weight: 500; }
+  .group-meta { font-size: 12px; color: #8b949e; margin-top: 2px; }
+  .group-badge { font-size: 12px; color: #3fb950; background: #0d2117; border: 1px solid #2ea043; border-radius: 12px; padding: 2px 10px; }
+
+  .progress-section { margin-top: 20px; display: none; }
+  .progress-section.show { display: block; }
+  .progress-bar-wrap { background: #0d1117; border-radius: 8px; height: 10px; overflow: hidden; border: 1px solid #30363d; margin: 10px 0; }
+  .progress-bar { height: 100%; background: linear-gradient(90deg, #238636, #3fb950); border-radius: 8px; transition: width 0.3s; width: 0%; }
+  .progress-stats { display: flex; gap: 20px; font-size: 13px; }
+  .stat { display: flex; flex-direction: column; gap: 2px; }
+  .stat-label { color: #8b949e; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-val { font-size: 18px; font-weight: 700; }
+  .stat-val.green { color: #3fb950; }
+  .stat-val.red { color: #f85149; }
+  .stat-val.blue { color: #58a6ff; }
+
+  .log-box {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 12px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 12px;
+    font-family: 'Courier New', monospace;
+    margin-top: 12px;
+  }
+  .log-line { padding: 2px 0; border-bottom: 1px solid #161b22; }
+  .log-line.ok { color: #3fb950; }
+  .log-line.err { color: #f85149; }
+  .log-line.warn { color: #e3b341; }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid #30363d; margin-bottom: 28px; }
+  .tab {
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #8b949e;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .tab:hover { color: #e6edf3; }
+  .tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+  .tab-settings { margin-left: auto; color: #8b949e; }
+  .tab-settings:hover { color: #e3b341; }
+  .tab-settings.active { color: #e3b341; border-bottom-color: #e3b341; }
+
+  .spinner {
+    width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .members-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .member-chip {
+    background: #1f2937;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: #8b949e;
+  }
+  .more-chip { color: #58a6ff; }
+
+  /* Settings credential display */
+  .cred-box {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+  }
+  .cred-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; font-weight: 600; }
+  .cred-row { display: flex; align-items: center; gap: 10px; }
+  .cred-value {
+    flex: 1;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    color: #e6edf3;
+    background: transparent;
+    border: none;
+    outline: none;
+    word-break: break-all;
+    cursor: text;
+    padding: 0;
+  }
+  .cred-value.masked { color: #8b949e; letter-spacing: 2px; }
+  .source-badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+  .source-config { background: #0d2117; color: #3fb950; border: 1px solid #2ea043; }
+  .source-env { background: #0c1825; color: #58a6ff; border: 1px solid #1f6feb; }
+  .source-none { background: #2d1115; color: #f85149; border: 1px solid #da3633; }
+
+  .divider { height: 1px; background: #30363d; margin: 24px 0; }
+
+  .setting-field { margin-bottom: 16px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">⚡ Tadder</div>
+  <div class="tagline">Telegram Member Tool</div>
+  <div class="user-badge" id="userBadge" style="display:none" onclick="logout()">
+    <span>👤</span>
+    <span id="userName">User</span>
+    <span style="color:#f85149;font-size:11px;">Logout</span>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Always-visible tabs (Settings always available) -->
+  <div class="tabs" id="globalTabs">
+    <div class="tab active" id="tabExtract" onclick="switchTab('extract')">① Extract Members</div>
+    <div class="tab" id="tabAdd" onclick="switchTab('add')">② Add Members</div>
+    <div class="tab tab-settings" id="tabSettings" onclick="switchTab('settings')">⚙️ Settings</div>
+  </div>
+
+  <!-- EXTRACT TAB -->
+  <div id="tab-extract" class="tab-content active">
+
+    <!-- Not logged in state -->
+    <div id="extractLoginWall" style="display:none">
+      <div class="card" style="text-align:center; padding: 40px 20px;">
+        <div style="font-size:48px;margin-bottom:16px;">🔐</div>
+        <h2 style="margin-bottom:8px;">Login Required</h2>
+        <p style="color:#8b949e;font-size:14px;margin-bottom:24px;">You need to log in with your Telegram account to extract members.</p>
+        <button class="btn btn-blue" onclick="showLoginCard()">Login to Telegram</button>
+      </div>
+    </div>
+
+    <!-- Login card (inline) -->
+    <div id="loginCard" class="card" style="display:none">
+      <div class="card-title">🔐 Login to Telegram</div>
+      <div class="card-sub">Enter your phone number to receive a verification code.</div>
+
+      <div id="stepPhone">
+        <div class="row">
+          <div class="field">
+            <label>Phone number (with country code)</label>
+            <input type="tel" id="phoneInput" placeholder="+1 555 000 0000" />
+          </div>
+          <button class="btn btn-blue" onclick="sendCode()" id="sendCodeBtn">Send Code</button>
+        </div>
+        <div class="alert alert-error" id="phoneError"></div>
+      </div>
+
+      <div id="stepCode" style="display:none; margin-top:16px;">
+        <div class="row">
+          <div class="field">
+            <label>Verification code sent to your phone</label>
+            <input type="text" id="codeInput" placeholder="12345" maxlength="10" />
+          </div>
+          <button class="btn btn-primary" onclick="verifyCode()" id="verifyBtn">Verify</button>
+        </div>
+        <div id="stepPassword" style="display:none; margin-top:12px;">
+          <label>Two-Factor Password (2FA)</label>
+          <input type="password" id="passwordInput" placeholder="Your 2FA password" />
+        </div>
+        <div class="alert alert-error" id="codeError"></div>
+      </div>
+    </div>
+
+    <!-- Main extract content (shown when logged in) -->
+    <div id="extractContent" style="display:none">
+      <div class="card">
+        <div class="card-title"><span class="step-badge">1</span> Choose Source Group</div>
+        <div class="card-sub">Paste any group link or username — or pick from the groups you're already in.</div>
+
+        <label>Group link or username</label>
+        <div class="row" style="margin-bottom:0">
+          <div class="field">
+            <input type="text" id="directGroupInput" placeholder="mygroup  or  https://t.me/+abc123" oninput="onDirectInput()" />
+          </div>
+          <button class="btn btn-primary" onclick="useDirectGroup()" id="useDirectBtn" disabled>
+            Use This Group
+          </button>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:12px;margin:18px 0;">
+          <div style="flex:1;height:1px;background:#30363d;"></div>
+          <span style="color:#8b949e;font-size:12px;font-weight:600;">OR PICK FROM YOUR GROUPS</span>
+          <div style="flex:1;height:1px;background:#30363d;"></div>
+        </div>
+
+        <button class="btn btn-blue" onclick="loadGroups()" id="loadGroupsBtn">
+          🔄 Load My Groups
+        </button>
+        <div class="alert alert-error" id="groupsError"></div>
+        <div id="groupList" class="group-list"></div>
+      </div>
+
+      <div class="card" id="extractCard" style="display:none">
+        <div class="card-title"><span class="step-badge">2</span> Extract Members</div>
+        <div class="card-sub" id="extractCardSub">Extract members from the selected group.</div>
+        <button class="btn btn-primary" onclick="extractMembers()" id="extractBtn">
+          ⬇️ Extract Members
+        </button>
+        <div class="alert alert-error" id="extractError"></div>
+        <div class="alert alert-success" id="extractSuccess"></div>
+        <div id="membersPreview" class="members-preview"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD TAB -->
+  <div id="tab-add" class="tab-content">
+    <div class="card">
+      <div class="card-title"><span class="step-badge">1</span> Target Group</div>
+      <div class="card-sub">Enter the username or private invite link of the group you want to add members to.</div>
+      <div class="row" style="align-items:flex-start">
+        <div class="field">
+          <label>Group username or invite link</label>
+          <input type="text" id="targetGroup" placeholder="mygroup  or  https://t.me/+JO-8L4UT7gIyNzc1" />
+        </div>
+        <div style="width:160px; flex-shrink:0">
+          <label>Max members to add <span style="color:#8b949e;font-weight:400;">(0 = all)</span></label>
+          <input type="number" id="addLimit" placeholder="e.g. 50" min="0" style="width:100%" />
+        </div>
+      </div>
+      <div style="margin-top:16px;">
+        <button class="btn btn-primary" onclick="startAdd()" id="startAddBtn">
+          ➕ Start Adding Members
+        </button>
+      </div>
+      <div class="alert alert-error" id="addError"></div>
+      <div class="alert alert-info" id="addInfo"></div>
+    </div>
+
+    <div class="card progress-section" id="progressSection">
+      <div class="card-title">⚙️ Adding Progress</div>
+      <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
+      <div class="progress-stats">
+        <div class="stat"><div class="stat-label">Total</div><div class="stat-val blue" id="statTotal">0</div></div>
+        <div class="stat"><div class="stat-label">Added</div><div class="stat-val green" id="statAdded">0</div></div>
+        <div class="stat"><div class="stat-label">Failed</div><div class="stat-val red" id="statFailed">0</div></div>
+        <div class="stat"><div class="stat-label">Done</div><div class="stat-val" id="statCurrent">0</div></div>
+      </div>
+      <div class="log-box" id="logBox"></div>
+    </div>
+  </div>
+
+  <!-- SETTINGS TAB -->
+  <div id="tab-settings" class="tab-content">
+
+    <!-- Current credentials display -->
+    <div class="card">
+      <div class="card-title">🔑 Current API Credentials</div>
+      <div class="card-sub">Your saved Telegram API credentials. Click the copy button to copy any value.</div>
+
+      <div class="cred-box">
+        <div class="cred-label">API ID &nbsp;<span id="sourceTag" class="source-badge source-none">not set</span></div>
+        <div class="cred-row">
+          <input class="cred-value" id="displayApiId" readonly value="—" />
+          <button class="btn-copy" onclick="copyVal('displayApiId', this)">Copy</button>
+        </div>
+      </div>
+
+      <div class="cred-box">
+        <div class="cred-label">API Hash</div>
+        <div class="cred-row">
+          <input class="cred-value" id="displayApiHash" readonly value="—" />
+          <button class="btn-copy" onclick="toggleMask()" id="maskBtn">Show</button>
+          <button class="btn-copy" onclick="copyVal('displayApiHash', this)">Copy</button>
+        </div>
+      </div>
+
+      <div class="alert alert-info show" style="margin-top:0">
+        ℹ️ Get your free API credentials at <a href="https://my.telegram.org/auth" target="_blank" style="color:#58a6ff">my.telegram.org</a> → log in → API development tools → create an app.
+      </div>
+    </div>
+
+    <!-- Edit / Save credentials -->
+    <div class="card">
+      <div class="card-title">✏️ Update API Credentials</div>
+      <div class="card-sub">Enter your Telegram API ID and Hash below. These are saved locally on this server.</div>
+
+      <div class="setting-field">
+        <label>API ID <span style="color:#8b949e;font-weight:400;">(numbers only)</span></label>
+        <input type="number" id="inputApiId" placeholder="e.g. 1234567" />
+      </div>
+      <div class="setting-field">
+        <label>API Hash <span style="color:#8b949e;font-weight:400;">(long string)</span></label>
+        <input type="text" id="inputApiHash" placeholder="e.g. a1b2c3d4e5f6..." />
+      </div>
+
+      <button class="btn btn-primary" onclick="saveSettings()" id="saveSettingsBtn">
+        💾 Save Credentials
+      </button>
+      <div class="alert alert-error" id="settingsError"></div>
+      <div class="alert alert-success" id="settingsSuccess"></div>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+let selectedGroup = null;
+let eventSource = null;
+let hashMasked = true;
+let rawHash = "";
+
+async function api(path, body) {
+  const opts = body !== undefined
+    ? { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) }
+    : {};
+  const r = await fetch(path, opts);
+  return r.json();
+}
+
+function showAlert(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.classList.add("show");
+}
+function hideAlert(id) {
+  document.getElementById(id).classList.remove("show");
+}
+
+// ── Tab switching ──────────────────────────────────────────────────────────────
+
+function switchTab(name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+  document.getElementById("tab-" + name).classList.add("active");
+  const tabEl = document.getElementById("tab" + name.charAt(0).toUpperCase() + name.slice(1));
+  if (tabEl) tabEl.classList.add("active");
+  if (name === "settings") loadSettings();
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+
+async function init() {
+  const res = await api("/api/check-auth");
+  if (!res.authenticated && res.error === "missing_credentials") {
+    showUnauthExtract(true);
+    return;
+  }
+  if (res.authenticated) {
+    showLoggedIn(res.name || res.username || "User");
+  } else {
+    showUnauthExtract(false);
+  }
+}
+
+function showUnauthExtract(missingCreds) {
+  document.getElementById("extractContent").style.display = "none";
+  if (missingCreds) {
+    document.getElementById("extractLoginWall").style.display = "none";
+    document.getElementById("loginCard").style.display = "none";
+    // Show settings tab with a nudge
+    switchTab("settings");
+    showAlert("settingsError", "⚠️ No API credentials found. Please enter your API ID and Hash below to get started.");
+  } else {
+    document.getElementById("extractLoginWall").style.display = "block";
+    document.getElementById("loginCard").style.display = "none";
+  }
+}
+
+function showLoggedIn(name) {
+  document.getElementById("loginCard").style.display = "none";
+  document.getElementById("extractLoginWall").style.display = "none";
+  document.getElementById("extractContent").style.display = "block";
+  document.getElementById("userBadge").style.display = "flex";
+  document.getElementById("userName").textContent = name;
+}
+
+function showLoginCard() {
+  document.getElementById("extractLoginWall").style.display = "none";
+  document.getElementById("loginCard").style.display = "block";
+}
+
+// ── Auth ───────────────────────────────────────────────────────────────────────
+
+async function sendCode() {
+  const phone = document.getElementById("phoneInput").value.trim();
+  if (!phone) return;
+  hideAlert("phoneError");
+  const btn = document.getElementById("sendCodeBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Sending...';
+  const res = await api("/api/send-code", { phone });
+  btn.disabled = false;
+  btn.innerHTML = "Send Code";
+  if (res.ok) {
+    document.getElementById("stepCode").style.display = "block";
+    document.getElementById("stepPhone").querySelector("input").disabled = true;
+    btn.disabled = true;
+  } else {
+    showAlert("phoneError", res.error);
+  }
+}
+
+async function verifyCode() {
+  const code = document.getElementById("codeInput").value.trim();
+  const password = document.getElementById("passwordInput").value.trim();
+  if (!code) return;
+  hideAlert("codeError");
+  const btn = document.getElementById("verifyBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  const res = await api("/api/verify-code", { code, password });
+  btn.disabled = false;
+  btn.innerHTML = "Verify";
+  if (res.ok) {
+    showLoggedIn(res.name || res.username || "User");
+  } else if (res.needs_password) {
+    document.getElementById("stepPassword").style.display = "block";
+    showAlert("codeError", "Please enter your 2FA password below.");
+  } else {
+    showAlert("codeError", res.error);
+  }
+}
+
+async function logout() {
+  if (!confirm("Logout from Telegram?")) return;
+  await api("/api/logout", {});
+  location.reload();
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────────
+
+async function loadSettings() {
+  const res = await api("/api/settings");
+  rawHash = res.api_hash || "";
+
+  const idEl = document.getElementById("displayApiId");
+  const hashEl = document.getElementById("displayApiHash");
+  const sourceTag = document.getElementById("sourceTag");
+
+  idEl.value = res.api_id || "—";
+  hashEl.value = hashMasked ? maskHash(rawHash) : rawHash;
+  if (!rawHash) hashEl.value = "—";
+
+  sourceTag.textContent = res.source === "config" ? "saved locally" : res.source === "env" ? "from env secret" : "not set";
+  sourceTag.className = "source-badge " + (res.source === "config" ? "source-config" : res.source === "env" ? "source-env" : "source-none");
+
+  // Pre-fill edit fields
+  if (res.api_id) document.getElementById("inputApiId").value = res.api_id;
+  if (res.api_hash) document.getElementById("inputApiHash").value = res.api_hash;
+}
+
+function maskHash(h) {
+  if (!h) return "—";
+  return h.slice(0, 4) + "••••••••••••••••••••••••" + h.slice(-4);
+}
+
+function toggleMask() {
+  hashMasked = !hashMasked;
+  const el = document.getElementById("displayApiHash");
+  el.value = hashMasked ? maskHash(rawHash) : rawHash;
+  document.getElementById("maskBtn").textContent = hashMasked ? "Show" : "Hide";
+}
+
+async function saveSettings() {
+  hideAlert("settingsError");
+  hideAlert("settingsSuccess");
+  const api_id = document.getElementById("inputApiId").value.trim();
+  const api_hash = document.getElementById("inputApiHash").value.trim();
+  const btn = document.getElementById("saveSettingsBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Saving...';
+  const res = await api("/api/settings", { api_id, api_hash });
+  btn.disabled = false;
+  btn.innerHTML = "💾 Save Credentials";
+  if (res.ok) {
+    showAlert("settingsSuccess", "✅ Credentials saved! Reload the page to log in with the new credentials.");
+    loadSettings();
+  } else {
+    showAlert("settingsError", res.error);
+  }
+}
+
+function copyVal(inputId, btn) {
+  const val = document.getElementById(inputId).value;
+  if (!val || val === "—") return;
+  // If masked, copy the real value
+  const realVal = inputId === "displayApiHash" ? rawHash : val;
+  navigator.clipboard.writeText(realVal).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = "✓ Copied";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove("copied"); }, 1800);
+  });
+}
+
+// ── Extract ────────────────────────────────────────────────────────────────────
+
+function onDirectInput() {
+  const val = document.getElementById("directGroupInput").value.trim();
+  document.getElementById("useDirectBtn").disabled = !val;
+}
+
+function useDirectGroup() {
+  const val = document.getElementById("directGroupInput").value.trim();
+  if (!val) return;
+  selectedGroup = { _direct: val };
+  document.querySelectorAll(".group-item").forEach(i => i.classList.remove("selected"));
+  document.getElementById("extractCard").style.display = "block";
+  document.getElementById("extractCardSub").textContent = `Extract members from: ${val}`;
+}
+
+function selectGroup(g, el) {
+  selectedGroup = g;
+  document.getElementById("directGroupInput").value = "";
+  document.getElementById("useDirectBtn").disabled = true;
+  document.querySelectorAll(".group-item").forEach(i => i.classList.remove("selected"));
+  el.classList.add("selected");
+  document.getElementById("extractCard").style.display = "block";
+  document.getElementById("extractCardSub").textContent = `Extract members from "${g.title}".`;
+}
+
+async function loadGroups() {
+  const btn = document.getElementById("loadGroupsBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Loading...';
+  hideAlert("groupsError");
+  document.getElementById("groupList").innerHTML = "";
+  const res = await api("/api/groups");
+  btn.disabled = false;
+  btn.innerHTML = "🔄 Load My Groups";
+  if (!res.ok) { showAlert("groupsError", res.error); return; }
+  const list = document.getElementById("groupList");
+  res.groups.forEach(g => {
+    const div = document.createElement("div");
+    div.className = "group-item";
+    div.innerHTML = `<div>
+      <div class="group-name">${g.title}</div>
+      <div class="group-meta">${g.username ? "@" + g.username : "Private group"} · ${g.members || "?"} members</div>
+    </div>
+    <div class="group-badge">Select</div>`;
+    div.onclick = () => selectGroup(g, div);
+    list.appendChild(div);
+  });
+  document.getElementById("extractCard").style.display = "block";
+}
+
+async function extractMembers() {
+  if (!selectedGroup) return;
+  hideAlert("extractError");
+  hideAlert("extractSuccess");
+  document.getElementById("membersPreview").innerHTML = "";
+  const btn = document.getElementById("extractBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Extracting...';
+  const id = selectedGroup._direct || selectedGroup.username || selectedGroup.id;
+  const res = await api("/api/extract", { identifier: String(id) });
+  btn.disabled = false;
+  btn.innerHTML = "⬇️ Extract Members";
+  if (!res.ok) { showAlert("extractError", res.error); return; }
+  showAlert("extractSuccess", `✅ ${res.count} members extracted and saved.`);
+  const preview = document.getElementById("membersPreview");
+  res.members.forEach(u => {
+    const chip = document.createElement("div");
+    chip.className = "member-chip";
+    chip.textContent = "@" + u;
+    preview.appendChild(chip);
+  });
+  if (res.count > 50) {
+    const more = document.createElement("div");
+    more.className = "member-chip more-chip";
+    more.textContent = `+${res.count - 50} more`;
+    preview.appendChild(more);
+  }
+}
+
+// ── Add Members ────────────────────────────────────────────────────────────────
+
+async function startAdd() {
+  const group = document.getElementById("targetGroup").value.trim();
+  if (!group) { showAlert("addError", "Please enter a target group."); return; }
+  hideAlert("addError");
+  hideAlert("addInfo");
+  if (eventSource) { eventSource.close(); eventSource = null; }
+
+  const limit = parseInt(document.getElementById("addLimit").value) || 0;
+  const btn = document.getElementById("startAddBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Starting...';
+
+  const res = await api("/api/add", { group, limit });
+  if (!res.ok) {
+    btn.disabled = false;
+    btn.innerHTML = "➕ Start Adding Members";
+    showAlert("addError", res.error);
+    return;
+  }
+
+  showAlert("addInfo", "⚙️ Add operation started. Watching progress...");
+  document.getElementById("progressSection").classList.add("show");
+  document.getElementById("logBox").innerHTML = "";
+  document.getElementById("progressBar").style.width = "0%";
+  ["statTotal","statAdded","statFailed","statCurrent"].forEach(id => document.getElementById(id).textContent = "0");
+
+  eventSource = new EventSource("/api/progress");
+  eventSource.onmessage = function(e) {
+    const d = JSON.parse(e.data);
+    if (d.type === "ping") return;
+    if (d.type === "progress") {
+      const pct = Math.round((d.current / d.total) * 100);
+      document.getElementById("progressBar").style.width = pct + "%";
+      document.getElementById("statTotal").textContent = d.total;
+      document.getElementById("statAdded").textContent = d.added;
+      document.getElementById("statFailed").textContent = d.failed;
+      document.getElementById("statCurrent").textContent = d.current;
+      const lb = document.getElementById("logBox");
+      const line = document.createElement("div");
+      const icons = { added: "✅", privacy: "🔒", too_many: "📛", not_contact: "👥", error: "❌" };
+      line.className = "log-line " + (d.status === "added" ? "ok" : "err");
+      const detail = d.detail ? ` — ${d.detail}` : "";
+      line.textContent = `[${d.current}/${d.total}] ${icons[d.status] || "❓"} @${d.user}${detail}`;
+      lb.appendChild(line);
+      lb.scrollTop = lb.scrollHeight;
+    } else if (d.type === "info") {
+      const lb = document.getElementById("logBox");
+      const line = document.createElement("div");
+      line.className = "log-line";
+      line.style.color = "#58a6ff";
+      line.textContent = "ℹ️ " + d.message;
+      lb.appendChild(line);
+      lb.scrollTop = lb.scrollHeight;
+    } else if (d.type === "flood") {
+      const lb = document.getElementById("logBox");
+      const line = document.createElement("div");
+      line.className = "log-line warn";
+      line.textContent = "⚠️ " + d.message;
+      lb.appendChild(line);
+      lb.scrollTop = lb.scrollHeight;
+    } else if (d.type === "done") {
+      eventSource.close();
+      btn.disabled = false;
+      btn.innerHTML = "➕ Start Adding Members";
+      document.getElementById("progressBar").style.width = "100%";
+      hideAlert("addInfo");
+      const lb = document.getElementById("logBox");
+      const line = document.createElement("div");
+      line.className = "log-line ok";
+      line.textContent = `✅ Done! Added: ${d.added} | Failed: ${d.failed} | Total: ${d.total}`;
+      lb.appendChild(line);
+      lb.scrollTop = lb.scrollHeight;
+    } else if (d.type === "error") {
+      eventSource.close();
+      btn.disabled = false;
+      btn.innerHTML = "➕ Start Adding Members";
+      showAlert("addError", d.message);
+    }
+  };
+}
+
+document.getElementById("phoneInput").addEventListener("keydown", e => { if (e.key === "Enter") sendCode(); });
+document.getElementById("codeInput").addEventListener("keydown", e => { if (e.key === "Enter") verifyCode(); });
+
+init();
+</script>
+</body>
+</html>
