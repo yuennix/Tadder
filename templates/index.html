@@ -276,6 +276,43 @@
     font-weight: 600;
     margin-top: 12px;
   }
+
+  .acc-check-badge {
+    display: none;
+    font-size: 11px;
+    padding: 2px 9px;
+    border-radius: 10px;
+    font-weight: 600;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .check-ready { background: #0d2117; color: #3fb950; border: 1px solid #2ea043; }
+  .check-flood { background: #2d1a00; color: #e3b341; border: 1px solid #e3b341; }
+  .check-offline { background: #2d1115; color: #f85149; border: 1px solid #da3633; }
+
+  .acc-select-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    user-select: none;
+  }
+  .acc-select-item.selected { border-color: #238636; background: #0d2117; }
+  .acc-select-item input[type="checkbox"] {
+    width: 16px; height: 16px;
+    accent-color: #238636;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .acc-select-name { font-size: 13px; font-weight: 600; flex: 1; }
+  .acc-select-meta { font-size: 11px; color: #8b949e; }
+  .sel-all-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
 </style>
 </head>
 <body>
@@ -400,8 +437,9 @@
       <div class="card-sub">Add multiple Telegram accounts to add members faster. Each logged-in account works in parallel — 2 accounts = 2× speed, 3 accounts = 3× speed, etc.</div>
       <div id="accountsList"></div>
       <div id="accSpeedBadge" class="acc-speed-badge" style="display:none"></div>
-      <div style="margin-top:16px;">
+      <div style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn btn-blue" onclick="addNewAccount()" id="addAccBtn">➕ Add Another Account</button>
+        <button class="btn btn-ghost" onclick="checkAllAccounts()" id="checkAccBtn">🔍 Check All Accounts</button>
       </div>
       <div class="alert alert-error" id="accError"></div>
     </div>
@@ -410,7 +448,7 @@
   <!-- ADD TAB -->
   <div id="tab-add" class="tab-content">
     <div class="card">
-      <div class="card-title"><span class="step-badge">1</span> Target Group</div>
+      <div class="card-title"><span class="step-badge">1</span> Target Group &amp; Settings</div>
       <div class="card-sub">Enter the username or private invite link of the group you want to add members to.</div>
       <div class="row" style="align-items:flex-start">
         <div class="field">
@@ -426,12 +464,21 @@
           <input type="number" id="addDelay" value="15" min="0" max="120" style="width:100%" />
         </div>
       </div>
-      <div style="margin-top:8px;">
-        <div class="alert alert-info show" style="margin-top:0;font-size:12px;">
-          ⏱️ Delay is randomised between <b>N</b> and <b>N+5</b> seconds per add. Default 15 → actual 15–20s. Keeps Telegram from flagging the account.
-        </div>
+      <div class="alert alert-info show" style="margin-top:10px;font-size:12px;">
+        ⏱️ Delay is randomised between <b>N</b> and <b>N+5</b> seconds per add. Default 15 → actual 15–20s. Keeps Telegram from flagging the account.
       </div>
-      <div style="margin-top:12px;">
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="step-badge">2</span> Select Accounts to Use</div>
+      <div class="card-sub">Choose which logged-in accounts will add members. Tick multiple for parallel speed.</div>
+      <div class="sel-all-row">
+        <button class="btn btn-ghost" style="font-size:12px;padding:6px 12px;" onclick="selectAllAccs(true)">✅ Select All</button>
+        <button class="btn btn-ghost" style="font-size:12px;padding:6px 12px;" onclick="selectAllAccs(false)">☐ Deselect All</button>
+        <button class="btn btn-ghost" style="font-size:12px;padding:6px 12px;" onclick="loadAccountsForAdd()" id="refreshAddAccBtn">🔄 Refresh</button>
+      </div>
+      <div id="addAccList"><div style="color:#8b949e;font-size:13px;">Loading accounts…</div></div>
+      <div style="margin-top:16px;">
         <button class="btn btn-primary" onclick="startAdd()" id="startAddBtn">
           ➕ Start Adding Members
         </button>
@@ -544,6 +591,7 @@ function switchTab(name) {
   if (tabEl) tabEl.classList.add("active");
   if (name === "settings") loadSettings();
   if (name === "accounts") loadAccounts();
+  if (name === "add") loadAccountsForAdd();
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
@@ -805,7 +853,7 @@ async function extractMembers() {
   res.members.forEach(u => {
     const chip = document.createElement("div");
     chip.className = "member-chip";
-    chip.textContent = u.startsWith("id:") ? `user#${u.slice(3)}` : "@" + u;
+    chip.textContent = u.startsWith("id:") ? `user#${u.split(":")[1]}` : "@" + u;
     preview.appendChild(chip);
   });
   if (res.count > 50) {
@@ -818,6 +866,42 @@ async function extractMembers() {
 
 // ── Add Members ────────────────────────────────────────────────────────────────
 
+async function loadAccountsForAdd() {
+  const container = document.getElementById("addAccList");
+  container.innerHTML = '<div style="color:#8b949e;font-size:13px;">Loading accounts…</div>';
+  const res = await api("/api/accounts");
+  if (!res.ok) { container.innerHTML = '<div style="color:#f85149;">Failed to load accounts.</div>'; return; }
+  container.innerHTML = "";
+  const loggedIn = res.accounts.filter(a => a.logged_in);
+  if (loggedIn.length === 0) {
+    container.innerHTML = '<div class="alert alert-warning show" style="margin:0;">⚠️ No logged-in accounts found. Go to the <b>Accounts</b> tab to log in first.</div>';
+    return;
+  }
+  loggedIn.forEach(acc => {
+    const label = document.createElement("label");
+    label.className = "acc-select-item selected";
+    label.htmlFor = `addacc-${acc.id}`;
+    const nameDisplay = `${acc.display_name || acc.name}${acc.username ? ' (@' + acc.username + ')' : ''}`;
+    label.innerHTML = `
+      <input type="checkbox" id="addacc-${acc.id}" value="${acc.id}" checked>
+      <div class="acc-dot green"></div>
+      <div style="flex:1">
+        <div class="acc-select-name">${nameDisplay}</div>
+      </div>`;
+    label.querySelector("input").addEventListener("change", function() {
+      label.classList.toggle("selected", this.checked);
+    });
+    container.appendChild(label);
+  });
+}
+
+function selectAllAccs(checked) {
+  document.querySelectorAll("#addAccList input[type='checkbox']").forEach(cb => {
+    cb.checked = checked;
+    cb.closest("label").classList.toggle("selected", checked);
+  });
+}
+
 async function startAdd() {
   const group = document.getElementById("targetGroup").value.trim();
   if (!group) { showAlert("addError", "Please enter a target group."); return; }
@@ -827,11 +911,23 @@ async function startAdd() {
 
   const limit = parseInt(document.getElementById("addLimit").value) || 0;
   const delay = parseInt(document.getElementById("addDelay").value) || 0;
+
+  // Collect selected account IDs (null = all if none rendered)
+  const checkboxes = document.querySelectorAll("#addAccList input[type='checkbox']");
+  let account_ids = null;
+  if (checkboxes.length > 0) {
+    account_ids = [...checkboxes].filter(cb => cb.checked).map(cb => cb.value);
+    if (account_ids.length === 0) {
+      showAlert("addError", "Please select at least one account.");
+      return;
+    }
+  }
+
   const btn = document.getElementById("startAddBtn");
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Starting...';
 
-  const res = await api("/api/add", { group, limit, delay });
+  const res = await api("/api/add", { group, limit, delay, account_ids });
   if (!res.ok) {
     btn.disabled = false;
     btn.innerHTML = "➕ Start Adding Members";
@@ -868,7 +964,7 @@ async function startAdd() {
       const icons = { added: "✅", privacy: "🔒", too_many: "📛", not_contact: "👥", error: "❌" };
       const acc = d.account ? `[${d.account}] ` : "";
       const detail = d.detail ? ` — ${d.detail}` : "";
-      const userDisplay = d.user.startsWith("id:") ? `user#${d.user.slice(3)}` : `@${d.user}`;
+      const userDisplay = d.user.startsWith("id:") ? `user#${d.user.split(":")[1]}` : `@${d.user}`;
       addLine(`[${d.current}/${d.total}] ${acc}${icons[d.status] || "❓"} ${userDisplay}${detail}`,
               d.status === "added" ? "ok" : "err");
     } else if (d.type === "info") {
@@ -906,6 +1002,29 @@ async function startAdd() {
 
 // ── Accounts ──────────────────────────────────────────────────────────────────
 
+async function checkAllAccounts() {
+  const btn = document.getElementById("checkAccBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Checking...';
+  hideAlert("accError");
+  const res = await api("/api/accounts/check", {});
+  btn.disabled = false;
+  btn.innerHTML = "🔍 Check All Accounts";
+  if (!res.ok) { showAlert("accError", res.error || "Check failed."); return; }
+  res.results.forEach(r => {
+    const el = document.getElementById(`acc-check-${r.id}`);
+    if (!el) return;
+    let cls, text;
+    if (r.status === "ready")           { cls = "check-ready";   text = "✅ Ready"; }
+    else if (r.status === "flood")      { cls = "check-flood";   text = `⚠️ Flood ${Math.ceil(r.flood_seconds / 60)}m`; }
+    else if (r.status === "not_logged_in") { cls = "check-offline"; text = "❌ Not logged in"; }
+    else                                { cls = "check-offline"; text = "❌ Error"; }
+    el.className = `acc-check-badge ${cls}`;
+    el.textContent = text;
+    el.style.display = "inline-block";
+  });
+}
+
 async function loadAccounts() {
   const container = document.getElementById("accountsList");
   container.innerHTML = '<div style="color:#8b949e;font-size:13px;">Loading accounts...</div>';
@@ -923,7 +1042,7 @@ async function loadAccounts() {
       <div class="account-item-header">
         <div class="acc-dot ${acc.logged_in ? 'green' : 'red'}"></div>
         <div>
-          <div class="acc-name">${nameDisplay}</div>
+          <div class="acc-name">${nameDisplay}<span class="acc-check-badge" id="acc-check-${acc.id}"></span></div>
           <div class="acc-meta">${acc.logged_in ? '🟢 Logged in' : '🔴 Not logged in'}</div>
         </div>
         <div class="acc-actions">

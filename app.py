@@ -274,6 +274,35 @@ async def _account_status(acc):
         except Exception: pass
 
 
+@app.route("/api/accounts/check", methods=["POST"])
+def check_accounts():
+    async def _check():
+        results = []
+        for acc in get_all_accounts():
+            client = make_client(acc["session"])
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    results.append({**acc, "status": "not_logged_in"})
+                    continue
+                me = await client.get_me()
+                results.append({**acc, "status": "ready",
+                                "display_name": me.first_name or "",
+                                "username": me.username or ""})
+            except FloodWaitError as e:
+                results.append({**acc, "status": "flood", "flood_seconds": e.seconds})
+            except Exception as e:
+                results.append({**acc, "status": "error", "message": str(e)})
+            finally:
+                try: await client.disconnect()
+                except Exception: pass
+        return results
+    try:
+        return jsonify({"ok": True, "results": _run(_check())})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
 @app.route("/api/accounts")
 def list_accounts():
     async def _list():
@@ -645,7 +674,7 @@ def run_account_worker(acc, gp_id, users, delay_min, delay_max, shared):
         loop.close()
 
 
-def run_add_worker(gp_id, limit, delay):
+def run_add_worker(gp_id, limit, delay, account_ids=None):
     global add_running
     add_running = True
     delay_min   = max(1, delay)
@@ -653,6 +682,8 @@ def run_add_worker(gp_id, limit, delay):
     async def _active_accounts():
         active = []
         for acc in get_all_accounts():
+            if account_ids is not None and acc["id"] not in account_ids:
+                continue
             client = make_client(acc["session"])
             try:
                 await client.connect()
@@ -716,9 +747,10 @@ def add_members():
     if add_running:
         return jsonify({"ok": False, "error": "An add operation is already running."})
     data  = request.get_json()
-    gp_id = data.get("group", "").strip()
-    limit = data.get("limit", 0)
-    delay = data.get("delay", 15)
+    gp_id       = data.get("group", "").strip()
+    limit       = data.get("limit", 0)
+    delay       = data.get("delay", 15)
+    account_ids = data.get("account_ids", None)   # list of IDs or None = all
     try: limit = int(limit)
     except (TypeError, ValueError): limit = 0
     try:
@@ -729,7 +761,7 @@ def add_members():
         return jsonify({"ok": False, "error": "Target group is required."})
     with progress_queue.mutex:
         progress_queue.queue.clear()
-    threading.Thread(target=run_add_worker, args=(gp_id, limit, delay), daemon=True).start()
+    threading.Thread(target=run_add_worker, args=(gp_id, limit, delay, account_ids), daemon=True).start()
     return jsonify({"ok": True})
 
 
