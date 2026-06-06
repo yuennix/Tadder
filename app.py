@@ -18,7 +18,8 @@ SESSION_FILE  = "tele_main"
 ACCOUNTS_FILE = "accounts.json"
 
 progress_queue = queue.Queue()
-add_running = False
+add_running    = False
+stop_requested = False
 
 # Server-side store: avoids cookie/proxy session issues
 _pending_codes: dict = {}   # key -> {"hash": str}
@@ -549,6 +550,10 @@ async def _account_worker_async(acc, gp_id, users, delay_min, delay_max, shared)
                             "message": f"[{label}] Resolved '{title}' ({kind}). Adding {len(users)} members."})
         i = 0
         while i < len(users):
+            if stop_requested:
+                progress_queue.put({"type": "warn",
+                                    "message": f"[{label}] Stopped by user."})
+                return
             userr = users[i]
             retry = False
             try:
@@ -734,19 +739,31 @@ def run_add_worker(gp_id, limit, delay, account_ids=None):
 
         for t in threads: t.start()
         for t in threads: t.join()
-        progress_queue.put({"type": "done", "added": shared["added"],
-                            "failed": shared["failed"], "total": total})
+        if stop_requested:
+            progress_queue.put({"type": "stopped", "added": shared["added"],
+                                "failed": shared["failed"], "total": total})
+        else:
+            progress_queue.put({"type": "done", "added": shared["added"],
+                                "failed": shared["failed"], "total": total})
     except Exception as e:
         progress_queue.put({"type": "error", "message": str(e)})
     finally:
         add_running = False
 
 
+@app.route("/api/stop", methods=["POST"])
+def stop_add():
+    global stop_requested
+    stop_requested = True
+    return jsonify({"ok": True})
+
+
 @app.route("/api/add", methods=["POST"])
 def add_members():
-    global add_running
+    global add_running, stop_requested
     if add_running:
         return jsonify({"ok": False, "error": "An add operation is already running."})
+    stop_requested = False
     data  = request.get_json()
     gp_id       = data.get("group", "").strip()
     limit       = data.get("limit", 0)

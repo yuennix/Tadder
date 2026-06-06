@@ -505,7 +505,12 @@
     </div>
 
     <div class="card progress-section" id="progressSection">
-      <div class="card-title">⚙️ Adding Progress</div>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+        <div class="card-title" style="margin-bottom:0;">⚙️ Adding Progress</div>
+        <button class="btn btn-danger" id="stopBtn" onclick="stopAdd()" style="font-size:13px; padding:7px 16px;">
+          ⏹ Stop
+        </button>
+      </div>
       <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
       <div class="progress-stats">
         <div class="stat"><div class="stat-label">Total</div><div class="stat-val blue" id="statTotal">0</div></div>
@@ -920,6 +925,13 @@ function selectAllAccs(checked) {
   });
 }
 
+async function stopAdd() {
+  const btn = document.getElementById("stopBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Stopping…';
+  await api("/api/stop", {});
+}
+
 async function startAdd() {
   const group = document.getElementById("targetGroup").value.trim();
   if (!group) { showAlert("addError", "Please enter a target group."); return; }
@@ -1023,19 +1035,27 @@ async function startAdd() {
         lb.appendChild(line);
         lb.scrollTop = lb.scrollHeight;
       }
-    } else if (d.type === "done") {
-      // Clear all flood badges when done
+    } else if (d.type === "done" || d.type === "stopped") {
       document.querySelectorAll(".acc-flood-badge").forEach(b => { b.style.display = "none"; b.textContent = ""; });
       eventSource.close();
       btn.disabled = false;
       btn.innerHTML = "➕ Start Adding Members";
-      document.getElementById("progressBar").style.width = "100%";
-      hideAlert("addInfo");
-      addLine(`✅ Done! Added: ${d.added} | Failed: ${d.failed} | Total: ${d.total}`, "ok");
+      document.getElementById("stopBtn").disabled = false;
+      document.getElementById("stopBtn").innerHTML = "⏹ Stop";
+      if (d.type === "done") {
+        document.getElementById("progressBar").style.width = "100%";
+        hideAlert("addInfo");
+        addLine(`✅ Done! Added: ${d.added} | Failed: ${d.failed} | Total: ${d.total}`, "ok");
+      } else {
+        hideAlert("addInfo");
+        addLine(`⏹ Stopped. Added: ${d.added} | Failed: ${d.failed} | Processed: ${d.total - (d.total - d.added - d.failed)}`, "warn");
+      }
     } else if (d.type === "error") {
       eventSource.close();
       btn.disabled = false;
       btn.innerHTML = "➕ Start Adding Members";
+      document.getElementById("stopBtn").disabled = false;
+      document.getElementById("stopBtn").innerHTML = "⏹ Stop";
       showAlert("addError", d.message);
     }
   };
