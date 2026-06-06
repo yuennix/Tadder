@@ -601,18 +601,19 @@ async def _account_worker_async(acc, gp_id, users, delay_min, delay_max, shared)
 
             except FloodWaitError as e:
                 wait = e.seconds
-                progress_queue.put({"type": "flood",
+                acc_id = acc["id"]
+                progress_queue.put({"type": "flood", "account_id": acc_id,
                                     "message": f"[{label}] FloodWait {wait}s — waiting then retrying @{userr}..."})
                 remaining = wait
                 while remaining > 0:
-                    progress_queue.put({"type": "countdown", "seconds": remaining})
+                    progress_queue.put({"type": "countdown", "account_id": acc_id, "seconds": remaining})
                     chunk = min(5, remaining)
                     await asyncio.sleep(chunk)
                     remaining -= chunk
-                progress_queue.put({"type": "countdown", "seconds": 0})
+                progress_queue.put({"type": "countdown", "account_id": acc_id, "seconds": 0})
                 retry = True
             except PeerFloodError:
-                progress_queue.put({"type": "flood",
+                progress_queue.put({"type": "flood", "account_id": acc["id"],
                                     "message": f"[{label}] PeerFlood — account restricted. Stopping this account."})
                 return
             except UserPrivacyRestrictedError:

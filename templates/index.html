@@ -313,6 +313,23 @@
   .acc-select-name { font-size: 13px; font-weight: 600; flex: 1; }
   .acc-select-meta { font-size: 11px; color: #8b949e; }
   .sel-all-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
+
+  .acc-flood-badge {
+    display: none;
+    font-size: 11px;
+    padding: 2px 9px;
+    border-radius: 10px;
+    font-weight: 600;
+    background: #2d1a00;
+    color: #e3b341;
+    border: 1px solid #e3b341;
+    white-space: nowrap;
+  }
+  .acc-flood-badge.peer-flood {
+    background: #2d1115;
+    color: #f85149;
+    border-color: #da3633;
+  }
 </style>
 </head>
 <body>
@@ -887,7 +904,8 @@ async function loadAccountsForAdd() {
       <div class="acc-dot green"></div>
       <div style="flex:1">
         <div class="acc-select-name">${nameDisplay}</div>
-      </div>`;
+      </div>
+      <span class="acc-flood-badge" id="acc-flood-${acc.id}"></span>`;
     label.querySelector("input").addEventListener("change", function() {
       label.classList.toggle("selected", this.checked);
     });
@@ -973,18 +991,41 @@ async function startAdd() {
       addLine("⚠️ " + d.message, "warn");
     } else if (d.type === "flood") {
       addLine("⏳ " + d.message, "warn");
+      if (d.account_id) {
+        const badge = document.getElementById(`acc-flood-${d.account_id}`);
+        if (badge) {
+          badge.className = "acc-flood-badge" + (d.message.includes("PeerFlood") ? " peer-flood" : "");
+          badge.textContent = d.message.includes("PeerFlood") ? "🚫 Restricted" : "⏳ Flood wait…";
+          badge.style.display = "inline-block";
+        }
+      }
     } else if (d.type === "countdown") {
-      // Update the last countdown line in place
+      // Update the per-account badge in the selector
+      if (d.account_id) {
+        const badge = document.getElementById(`acc-flood-${d.account_id}`);
+        if (badge) {
+          if (d.seconds > 0) {
+            badge.style.display = "inline-block";
+            badge.textContent = `⏳ ${d.seconds}s`;
+          } else {
+            badge.style.display = "none";
+            badge.textContent = "";
+          }
+        }
+      }
+      // Update the shared countdown line in the log
       const lines = lb.querySelectorAll(".countdown-line");
       lines.forEach(l => l.remove());
       if (d.seconds > 0) {
         const line = document.createElement("div");
         line.className = "log-line warn countdown-line";
-        line.textContent = `⏱ Waiting... ${d.seconds}s remaining`;
+        line.textContent = `⏱ Waiting… ${d.seconds}s remaining`;
         lb.appendChild(line);
         lb.scrollTop = lb.scrollHeight;
       }
     } else if (d.type === "done") {
+      // Clear all flood badges when done
+      document.querySelectorAll(".acc-flood-badge").forEach(b => { b.style.display = "none"; b.textContent = ""; });
       eventSource.close();
       btn.disabled = false;
       btn.innerHTML = "➕ Start Adding Members";
