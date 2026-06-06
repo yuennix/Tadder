@@ -7,7 +7,7 @@ from telethon.errors import (
 )
 from telethon.tl.functions.channels import InviteToChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest, AddChatUserRequest
-from telethon.tl.types import Channel as TeleChannel
+from telethon.tl.types import Channel as TeleChannel, InputPeerUser
 import os, queue, threading, json, uuid, asyncio, random, time
 
 app = Flask(__name__)
@@ -454,7 +454,11 @@ def extract():
             async for user in client.iter_participants(chat, aggressive=True):
                 if user.bot or user.id == my_id:
                     continue
-                entry = user.username if user.username else f"id:{user.id}"
+                if user.username:
+                    entry = user.username
+                else:
+                    # Store access_hash so any account session can add this user later
+                    entry = f"id:{user.id}:{user.access_hash}"
                 saved.append(entry)
             with open("members.txt", "w") as f:
                 for entry in saved:
@@ -520,20 +524,38 @@ async def _account_worker_async(acc, gp_id, users, delay_min, delay_max, shared)
             retry = False
             try:
                 # ── Resolve peer ───────────────────────────────────────────
-                lookup = int(userr[3:]) if userr.startswith("id:") else userr
-                try:
-                    peer = await client.get_input_entity(lookup)
-                except (ValueError, KeyError, TypeError):
-                    # ID-only user — no access hash in this session's cache
-                    with shared["lock"]:
-                        shared["failed"]  += 1
-                        shared["current"] += 1
-                        a, f, c, t = shared["added"], shared["failed"], shared["current"], shared["total"]
-                    progress_queue.put({"type": "progress", "current": c, "total": t,
-                                        "added": a, "failed": f, "user": userr,
-                                        "status": "no_hash", "account": label})
-                    i += 1
-                    continue
+                if userr.startswith("id:"):
+                    parts = userr.split(":")
+                    if len(parts) == 3:
+                        # New format: id:USER_ID:ACCESS_HASH — build directly, no lookup needed
+                        peer = InputPeerUser(int(parts[1]), int(parts[2]))
+                    else:
+                        # Old format: id:USER_ID — try session cache, skip if not found
+                        try:
+                            peer = await client.get_input_entity(int(parts[1]))
+                        except (ValueError, KeyError, TypeError):
+                            with shared["lock"]:
+                                shared["failed"]  += 1
+                                shared["current"] += 1
+                                a, f, c, t = shared["added"], shared["failed"], shared["current"], shared["total"]
+                            progress_queue.put({"type": "progress", "current": c, "total": t,
+                                                "added": a, "failed": f, "user": userr,
+                                                "status": "no_hash", "account": label})
+                            i += 1
+                            continue
+                else:
+                    try:
+                        peer = await client.get_input_entity(userr)
+                    except (ValueError, KeyError, TypeError):
+                        with shared["lock"]:
+                            shared["failed"]  += 1
+                            shared["current"] += 1
+                            a, f, c, t = shared["added"], shared["failed"], shared["current"], shared["total"]
+                        progress_queue.put({"type": "progress", "current": c, "total": t,
+                                            "added": a, "failed": f, "user": userr,
+                                            "status": "no_hash", "account": label})
+                        i += 1
+                        continue
 
                 # ── Add with correct method + fallback ─────────────────────
                 await _do_add(client, chat, peer, is_channel)
